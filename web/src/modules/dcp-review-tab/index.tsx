@@ -599,6 +599,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   const [copyToast, setCopyToast] = useState('')
   const [currentUser, setCurrentUser] = useState<{ uuid: string; name: string }>({ uuid: '', name: '' })
   const [resolutionRule, setResolutionRule] = useState<any>(null)
+  const [configRoles, setConfigRoles] = useState<any[]>([])
 
   useEffect(() => {
     fetch('/project/api/project/users/me', { credentials: 'include' })
@@ -607,12 +608,13 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       .catch(() => {})
   }, [])
 
-  // 加载当前评审类型的决议规则配置
+  // 加载当前评审类型的决议规则配置 + 角色列表
   const rvReviewType = (rv.review_type || 'dcp')
   useEffect(() => {
     api.getPluginConfig().then(c => {
       const rules = c.resolution_rule_config || {}
       setResolutionRule(rules[rvReviewType] || null)
+      setConfigRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === rvReviewType))
     }).catch(() => {})
   }, [rvReviewType])
 
@@ -694,9 +696,17 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
           <h4 style={S.sectionTitle}>发布决议</h4>
           <div style={{ marginBottom: 8, fontSize: 13, color: '#333' }}>
             {(() => {
-              const total = data.reviewers?.length || 0
-              const done = data.reviewers?.filter((r: any) => r.submitted_at > 0).length || 0
-              return `评审进度: ${done}/${total} 已提交（全部提交后即可发布决议）`
+              const reviewers: any[] = data.reviewers || []
+              const submitMode = resolutionRule?.submitRequirement?.mode || 'must_vote_roles'
+              if (submitMode === 'publisher_only') return '可直接发布决议'
+              if (submitMode === 'must_vote_roles') {
+                const mustVoteNames = configRoles.filter((r: any) => r.must_vote).map((r: any) => r.role_name)
+                const mustRvrs = reviewers.filter((r: any) => mustVoteNames.includes(r.role_name))
+                const mustDone = mustRvrs.filter((r: any) => r.submitted_at > 0).length
+                return `必投角色 ${mustDone}/${mustRvrs.length} 已提交（必投角色全部提交后即可发布决议）`
+              }
+              const done = reviewers.filter((r: any) => r.submitted_at > 0).length
+              return `评审进度: ${done}/${reviewers.length} 已提交（全部提交后即可发布决议）`
             })()}
           </div>
           {/* 投票状态指示器（按决议规则配置展示） */}
@@ -708,6 +718,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
             const excludeRoles = rule.passRule?.excludeRoles || []
             const passMode = rule.passRule?.mode || 'min_approval_count'
             const minCount = rule.passRule?.minCount || 3
+            const submitMode = rule.submitRequirement?.mode || 'must_vote_roles'
 
             if (passMode === 'min_approval_count') {
               const candidates = reviewers.filter((r: any) => !excludeRoles.includes(r.role_name))
@@ -722,7 +733,22 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
                 </div>
               )
             }
-            // all_required_submitted / all_required_approved 模式：展示提交进度
+            // 非 min_approval_count 模式：按 submitRequirement.mode 展示提交进度
+            if (submitMode === 'publisher_only') return null
+            if (submitMode === 'must_vote_roles') {
+              const mustVoteNames = configRoles.filter((r: any) => r.must_vote).map((r: any) => r.role_name)
+              const mustRvrs = reviewers.filter((r: any) => mustVoteNames.includes(r.role_name))
+              const mustDone = mustRvrs.filter((r: any) => r.submitted_at > 0).length
+              const allMustDone = mustDone >= mustRvrs.length
+              return (
+                <div style={{ marginBottom: 8, padding: '6px 12px', borderRadius: 4, fontSize: 13, background: allMustDone ? '#f6ffed' : '#fff7e6', color: allMustDone ? '#52c41a' : '#faad14' }}>
+                  {allMustDone
+                    ? `必投角色已全部提交（${mustDone}/${mustRvrs.length}），可发布决议`
+                    : `必投角色 ${mustDone}/${mustRvrs.length} 已提交，待必投角色全部提交后可发布决议`}
+                </div>
+              )
+            }
+            // all_reviewers 模式
             const doneCount = reviewers.filter((r: any) => r.submitted_at > 0).length
             const allDone = doneCount >= reviewers.length
             return (

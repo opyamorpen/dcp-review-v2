@@ -449,14 +449,16 @@ const ReviewerWorkspace: React.FC<{
  const [previewLoading, setPreviewLoading] = useState(false)
  const [copyToast, setCopyToast] = useState('')
  const [resolutionRule, setResolutionRule] = useState<any>(null)
+ const [configRoles, setConfigRoles] = useState<any[]>([])
 
- // 加载当前评审类型的决议规则配置
+ // 加载当前评审类型的决议规则配置 + 角色列表
  const _rvReviewType = (rv.review_type || 'dcp')
  useEffect(() => {
- callApi('/dcp/config').then((c: any) => {
- const rules = c.resolution_rule_config || {}
- setResolutionRule(rules[_rvReviewType] || null)
- }).catch(() => {})
+   callApi('/dcp/config').then((c: any) => {
+     const rules = c.resolution_rule_config || {}
+     setResolutionRule(rules[_rvReviewType] || null)
+     setConfigRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === _rvReviewType))
+   }).catch(() => {})
  }, [_rvReviewType])
  const canPublish = !!resolutionRule && (resolutionRule.publisher?.roles || []).includes(myRole)
 
@@ -1049,7 +1051,17 @@ const ReviewerWorkspace: React.FC<{
  <div style={{ ...S.card, background: '#fff7e6', borderLeft: '4px solid #faad14' }}>
  <h4 style={S.sectionTitle}>发布决议</h4>
  <div style={{ marginBottom: 8, fontSize: 13, color: '#333' }}>
- 全部 {reviewers.length} 名评审人已提交意见，请发布最终决议。
+   {(() => {
+     const submitMode = resolutionRule?.submitRequirement?.mode || 'must_vote_roles'
+     if (submitMode === 'publisher_only') return '可直接发布决议'
+     if (submitMode === 'must_vote_roles') {
+       const mustVoteNames = configRoles.filter((r: any) => r.must_vote).map((r: any) => r.role_name)
+       const mustRvrs = reviewers.filter((r: any) => mustVoteNames.includes(r.role_name))
+       const mustDone = mustRvrs.filter((r: any) => r.submitted_at > 0).length
+       return `必投角色 ${mustDone}/${mustRvrs.length} 已提交，请发布最终决议。`
+     }
+     return `全部 ${reviewers.length} 名评审人已提交意见，请发布最终决议。`
+   })()}
  </div>
  {(() => {
  const excludeRoles = resolutionRule?.passRule?.excludeRoles || []
@@ -1066,6 +1078,21 @@ const ReviewerWorkspace: React.FC<{
  : `同意票仅 ${acceptCount}/${candidates.length}，不满足大多数（需≥${minCount}）`}
  </div>
  )
+ }
+ const submitMode = resolutionRule?.submitRequirement?.mode || 'must_vote_roles'
+ if (submitMode === 'publisher_only') return null
+ if (submitMode === 'must_vote_roles') {
+   const mustVoteNames = configRoles.filter((r: any) => r.must_vote).map((r: any) => r.role_name)
+   const mustRvrs = reviewers.filter((r: any) => mustVoteNames.includes(r.role_name))
+   const mustDone = mustRvrs.filter((r: any) => r.submitted_at > 0).length
+   const allMustDone = mustDone >= mustRvrs.length
+   return (
+   <div style={{ marginBottom: 8, padding: '6px 12px', borderRadius: 4, fontSize: 13, background: allMustDone ? '#f6ffed' : '#fff7e6', color: allMustDone ? '#52c41a' : '#faad14' }}>
+   {allMustDone
+   ? `必投角色已全部提交（${mustDone}/${mustRvrs.length}），可发布决议`
+   : `必投角色 ${mustDone}/${mustRvrs.length} 已提交，待必投角色全部提交后可发布决议`}
+   </div>
+   )
  }
  const doneCount = reviewers.filter((r: any) => r.submitted_at > 0).length
  return (
@@ -1130,10 +1157,24 @@ const ReviewerWorkspace: React.FC<{
  <div style={{ ...S.card }}>
  <h4 style={S.sectionTitle}>决议状态</h4>
  <div style={{ fontSize: 13, color: '#666' }}>
- {canPublish
- ? `评审进度: ${reviewers.filter((r: any) => r.submitted_at > 0).length}/${reviewers.length} 已提交（全部提交后即可发布决议）`
- : `评审进度: ${reviewers.filter((r: any) => r.submitted_at > 0).length}/${reviewers.length} 已提交（全部提交后由决议发布人发布决议）`
- }
+ {(() => {
+   const submitMode = resolutionRule?.submitRequirement?.mode || 'must_vote_roles'
+   if (submitMode === 'publisher_only') {
+     return canPublish ? '可直接发布决议' : '等待决议发布人发布决议'
+   }
+   if (submitMode === 'must_vote_roles') {
+     const mustVoteNames = configRoles.filter((r: any) => r.must_vote).map((r: any) => r.role_name)
+     const mustRvrs = reviewers.filter((r: any) => mustVoteNames.includes(r.role_name))
+     const mustDone = mustRvrs.filter((r: any) => r.submitted_at > 0).length
+     return canPublish
+       ? `必投角色 ${mustDone}/${mustRvrs.length} 已提交（必投角色全部提交后即可发布决议）`
+       : `必投角色 ${mustDone}/${mustRvrs.length} 已提交（必投角色全部提交后由决议发布人发布决议）`
+   }
+   const done = reviewers.filter((r: any) => r.submitted_at > 0).length
+   return canPublish
+     ? `评审进度: ${done}/${reviewers.length} 已提交（全部提交后即可发布决议）`
+     : `评审进度: ${done}/${reviewers.length} 已提交（全部提交后由决议发布人发布决议）`
+ })()}
  </div>
  </div>
  )
