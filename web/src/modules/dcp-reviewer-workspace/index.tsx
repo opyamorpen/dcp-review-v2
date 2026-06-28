@@ -390,12 +390,11 @@ async function fetchMembers() {
 }
 
 const UserPicker: React.FC<{ value: string; onChange: (u: { uuid: string; name: string }) => void; placeholder?: string }> = ({ value, onChange, placeholder = '搜索用户…' }) => {
- const [kw, setKw] = useState('')
  const [results, setResults] = useState<any[]>([])
  const [open, setOpen] = useState(false)
  const [selName, setSelName] = useState('')
  const timerRef = React.useRef<any>(null)
- const isComposingRef = React.useRef(false)
+ const inputRef = React.useRef<HTMLInputElement>(null)
 
  async function doSearch(k: string) {
  if (k.trim().length < 1) { setResults([]); setOpen(false); return }
@@ -409,14 +408,14 @@ const UserPicker: React.FC<{ value: string; onChange: (u: { uuid: string; name: 
  if (selName && value) {
  return <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
  <span style={{ fontSize: 12, background: '#e6f4ff', padding: '2px 8px', borderRadius: 3 }}>{selName}</span>
- <button onClick={() => { onChange({ uuid: '', name: '' }); setSelName(''); setKw('') }} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#ff4d4f', fontSize: 14, padding: 0 }}>×</button>
+ <button onClick={() => { onChange({ uuid: '', name: '' }); setSelName(''); if (inputRef.current) inputRef.current.value = '' }} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#ff4d4f', fontSize: 14, padding: 0 }}>×</button>
  </div>
  }
 
  return <div style={{ position: 'relative' }}>
- <input style={{ ...S.input, width: 120 }} value={kw} onChange={e => { const v = e.target.value; if (!isComposingRef.current) { setKw(v); if (timerRef.current) clearTimeout(timerRef.current); timerRef.current = setTimeout(() => doSearch(v), 300) } }} onCompositionStart={() => { isComposingRef.current = true }} onCompositionEnd={e => { isComposingRef.current = false; const v = (e.target as HTMLInputElement).value; setKw(v); if (timerRef.current) clearTimeout(timerRef.current); timerRef.current = setTimeout(() => doSearch(v), 300) }} onFocus={() => { if (results.length > 0) setOpen(true) }} onBlur={() => setTimeout(() => setOpen(false), 200)} placeholder={placeholder} />
+ <input ref={inputRef} style={{ ...S.input, width: 120 }} onChange={e => { const v = e.target.value; if (timerRef.current) clearTimeout(timerRef.current); timerRef.current = setTimeout(() => doSearch(v), 300) }} onFocus={() => { if (results.length > 0) setOpen(true) }} onBlur={() => setTimeout(() => setOpen(false), 200)} placeholder={placeholder} />
  {open && results.length > 0 && <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 1000, maxHeight: 180, overflowY: 'auto', background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4, boxShadow: '0 2px 8px rgba(0,0,0,0.1)', minWidth: 200 }}>
- {results.map((u: any) => <div key={u.uuid} onMouseDown={e => { e.preventDefault(); onChange({ uuid: u.uuid, name: u.name }); setSelName(u.name); setKw(''); setResults([]); setOpen(false) }} style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, borderBottom: '1px solid #f0f0f0', display: 'flex', justifyContent: 'space-between' }} onMouseEnter={e => { (e.target as HTMLElement).style.background = '#f5f5f5' }} onMouseLeave={e => { (e.target as HTMLElement).style.background = 'transparent' }}>
+ {results.map((u: any) => <div key={u.uuid} onMouseDown={e => { e.preventDefault(); onChange({ uuid: u.uuid, name: u.name }); setSelName(u.name); if (inputRef.current) inputRef.current.value = ''; setResults([]); setOpen(false) }} style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, borderBottom: '1px solid #f0f0f0', display: 'flex', justifyContent: 'space-between' }} onMouseEnter={e => { (e.target as HTMLElement).style.background = '#f5f5f5' }} onMouseLeave={e => { (e.target as HTMLElement).style.background = 'transparent' }}>
  <span>{u.name}</span><span style={{ color: '#999', fontSize: 11 }}>{u.email}</span>
  </div>)}
  </div>}

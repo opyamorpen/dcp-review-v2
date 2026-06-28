@@ -409,13 +409,11 @@ const UserPicker: React.FC<{
   onChange: (user: { uuid: string; name: string }) => void
   placeholder?: string
 }> = ({ value, onChange, placeholder = '搜索用户姓名或邮箱…' }) => {
-  const [keyword, setKeyword] = useState('')
   const [results, setResults] = useState<{ uuid: string; name: string; email: string }[]>([])
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [selectedName, setSelectedName] = useState('')
   const timerRef = React.useRef<any>(null)
-  const isComposingRef = React.useRef(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
 
   function doSearch(kw: string) {
@@ -428,26 +426,20 @@ const UserPicker: React.FC<{
     }).catch(() => { setResults([]); setOpen(false); setLoading(false) })
   }
 
-  function handleInput(v: string) {
-    setKeyword(v)
-    if (timerRef.current) clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => doSearch(v), 300)
-  }
-
   function handleSelect(u: { uuid: string; name: string; email: string }) {
     onChange({ uuid: u.uuid, name: u.name })
     setSelectedName(u.name)
-    setKeyword('')
     setResults([])
     setOpen(false)
+    if (inputRef.current) inputRef.current.value = ''
   }
 
   function handleClear() {
     onChange({ uuid: '', name: '' })
     setSelectedName('')
-    setKeyword('')
     setResults([])
     setOpen(false)
+    if (inputRef.current) inputRef.current.value = ''
   }
 
   // 显示：已选用户名 或 搜索框
@@ -471,16 +463,12 @@ const UserPicker: React.FC<{
       <input
         ref={inputRef}
         style={S.input}
-        value={keyword}
         onChange={e => {
-          if (!isComposingRef.current) handleInput(e.target.value)
+          const v = e.target.value
+          if (timerRef.current) clearTimeout(timerRef.current)
+          timerRef.current = setTimeout(() => doSearch(v), 300)
         }}
-        onCompositionStart={() => { isComposingRef.current = true }}
-        onCompositionEnd={e => {
-          isComposingRef.current = false
-          handleInput((e.target as HTMLInputElement).value)
-        }}
-        onFocus={() => { if (results.length > 0 && keyword.trim().length > 0) setOpen(true) }}
+        onFocus={() => { if (results.length > 0) setOpen(true) }}
         onBlur={() => setTimeout(() => setOpen(false), 200)}
         placeholder={placeholder}
       />
