@@ -581,6 +581,17 @@ function validateResolutionRuleReachability(rule: any, roleTemplates: any[], rev
   return '' // 校验通过
 }
 
+// 结论文案映射
+function conclusionLabel(value: string): string {
+  return ({
+    pass: '通过',
+    conditional_pass: '有条件通过',
+    reject: '驳回',
+    fail: '不通过',
+    rework: '返工',
+  } as Record<string, string>)[value] || '未记录'
+}
+
 // 判断评审单是否满足决议前置条件（按 submitRequirement.mode 判断）
 // 排除决议角色——决议人不参与前置评审提交
 function isResolutionReady(rule: any, reviewers: any[], roleTemplates: any[]): boolean {
@@ -971,7 +982,10 @@ export async function listReviewsByProject(req: any): Promise<PluginResponse> {
   // 补充阶段名称映射
   const allPhases = await qAll(phaseTpl)
   const phMap = new Map(allPhases.map((p: any) => [p.phase_code, p.phase_name]))
-  // 补充评审人完成情况及材料进度
+  // 预加载角色模板（用于决议条件判断）
+  const allRoleTpls = await qAll(roleTpl)
+  // 预加载决议规则（按 review_type）
+  const ruleCache: Record<string, any> = {}
   const enriched = await Promise.all(rvs.map(async (r: any) => {
     const reviewers = await qAll(rvReviewer, (v: any) => v.review_uuid === r.review_uuid)
     const submitted = reviewers.filter((rvr: any) => rvr.submitted_at > 0).length
@@ -979,8 +993,48 @@ export async function listReviewsByProject(req: any): Promise<PluginResponse> {
     const reviewsMats = await qAll(matItem, (v: any) => v.review_uuid === r.review_uuid)
     const matSubmitted = reviewsMats.filter((m: any) => !!m.file_data).length
     const resolutions = await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)
-    const final_conclusion = resolutions[0]?.final_conclusion || ''
-    return { ...r, phase_name: phMap.get(r.phase_code) || '', reviewer_total: reviewers.length, reviewer_done: submitted, linked_issue_count: issues.length, material_total: reviewsMats.length, material_submitted: matSubmitted, final_conclusion }
+    const res = resolutions[0] || null
+    const final_conclusion = res?.final_conclusion || ''
+
+    // 决议状态展示字段
+    let resolution_status = ''
+    let resolution_label = ''
+    let resolution_pending = false
+    if (res) {
+      resolution_status = 'published'
+      resolution_label = conclusionLabel(res.final_conclusion)
+    } else if (r.status === 'draft') {
+      resolution_status = 'not_started'
+      resolution_label = '未发起'
+    } else if (r.status === 'reviewing') {
+      const rType = r.review_type || 'dcp'
+      if (!ruleCache[rType]) ruleCache[rType] = await getResolutionRuleByType(rType)
+      const rule = ruleCache[rType]
+      const roleTpls = filterRolesByType(allRoleTpls, rType)
+      const ready = isResolutionReady(rule, reviewers, roleTpls)
+      resolution_pending = ready
+      resolution_status = ready ? 'pending' : 'reviewing'
+      resolution_label = ready ? '待决议' : '评审中'
+    } else {
+      resolution_status = 'missing'
+      resolution_label = '未记录'
+    }
+
+    return {
+      ...r,
+      phase_name: phMap.get(r.phase_code) || '',
+      reviewer_total: reviewers.length,
+      reviewer_done: submitted,
+      linked_issue_count: issues.length,
+      material_total: reviewsMats.length,
+      material_submitted: matSubmitted,
+      final_conclusion,
+      resolution_status,
+      resolution_label,
+      resolution_pending,
+      resolution_published_at: res?.published_at || 0,
+      resolution_published_by_name: res?.published_by_name || '',
+    }
   }))
   enriched.sort((a: any, b: any) => (b.created_at || 0) - (a.created_at || 0))
   // 返回已通过阶段列表（决议为 pass/conditional_pass，供前端依赖检查）
@@ -1380,6 +1434,52 @@ export async function recallReview(req: any): Promise<PluginResponse> {
     `评审已撤回，回到草稿状态。原因：${reason || '未填写'}`)
 
   return { body: { ok: true, status: 'draft' } }
+}
+
+// ============================================================
+// 更新评审单基础信息（会议时间等）
+// ============================================================
+export async function updateReviewBasicInfo(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  const b = (req.body || {}) as any
+  const { operator_uuid, meeting_time, review_title } = b
+
+  if (!rid || !operator_uuid) {
+    return { body: { error: '缺少必要字段' }, statusCode: 400 }
+  }
+
+  const rv = await review.get(rid)
+  if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
+
+  if (rv.creator_uuid !== operator_uuid) {
+    return { body: { error: '仅评审发起人可以修改会议时间' }, statusCode: 403 }
+  }
+
+  if (rv.status !== 'draft' && rv.status !== 'reviewing') {
+    return { body: { error: '当前状态不可修改会议时间' }, statusCode: 400 }
+  }
+
+  const hasResolution = (await qAll(resolution, (v: any) => v.review_uuid === rid)).length > 0
+  if (hasResolution) {
+    return { body: { error: '评审已发布决议，不可修改会议时间' }, statusCode: 400 }
+  }
+
+  const next: any = {
+    ...rv,
+    meeting_time: Number(meeting_time || 0),
+    updated_at: Date.now(),
+  }
+
+  if (typeof review_title === 'string') {
+    next.review_title = review_title.trim() || rv.review_title
+  }
+
+  await review.set(rid, next)
+
+  await writeAudit(rid, operator_uuid, '修改会议时间', rid,
+    `会议时间修改为: ${next.meeting_time ? new Date(next.meeting_time).toLocaleString('zh-CN') : '未设置'}`)
+
+  return { body: { ok: true, review: next } }
 }
 
 // ============================================================

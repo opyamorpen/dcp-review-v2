@@ -20,6 +20,16 @@ const MATERIAL_STATUS: Record<string, { text: string; color: string; bg: string 
 }
 const CONCLUSION_LABELS: Record<string, string> = { pass: '✅ 通过', conditional_pass: '⚠️ 有条件通过', fail: '❌ 不通过', rework: '🔧 返工' }
 
+// 决议状态列：resolution_status → 颜色
+const RESOLUTION_TAG_COLORS: Record<string, string> = {
+  pass: '#52c41a', conditional_pass: '#faad14', reject: '#ff4d4f', fail: '#ff4d4f', rework: '#ff4d4f',
+  published: '#52c41a', pending: '#1677ff', reviewing: '#8c8c8c', not_started: '#999', missing: '#999',
+}
+// final_conclusion → resolution_status 映射（当后端只返回 final_conclusion 时兜底）
+const RESOLUTION_COLORS: Record<string, string> = {
+  pass: 'pass', conditional_pass: 'conditional_pass', reject: 'reject', fail: 'fail', rework: 'rework',
+}
+
 // 构建评审单直链（指向评审总览模块，带 review_uuid 参数）
 // dcp-review-tab 运行在 /project/ 页面内，window.location 无法提取插件路径
 // 从已加载的 script 标签 src 中提取插件基础路径
@@ -331,6 +341,7 @@ const App: React.FC = () => {
         <table style={{ ...S.table, marginBottom: 0 }}>
           <thead><tr>
             <th style={S.th}>编号</th><th style={S.th}>阶段</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 70, textAlign: 'center' }}>状态</th>
+            <th style={{ ...S.th, width: 90, textAlign: 'center' }}>决议</th>
             <th style={{ ...S.th, width: 60, textAlign: 'center' }}>资料</th>
             <th style={{ ...S.th, width: 100, textAlign: 'center' }}>评审人</th>
             <th style={{ ...S.th, width: 80, textAlign: 'center' }}>工作项</th>
@@ -349,6 +360,13 @@ const App: React.FC = () => {
                   <td style={{ ...S.td, color: '#1677ff', textDecoration: 'underline' }}>{r.review_title || r.review_uuid}</td>
                   <td style={{ ...S.td, textAlign: 'center' }}>
                     <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, background: `${sc}1a`, color: sc, fontWeight: 600, whiteSpace: 'nowrap' }}>{sl}</span>
+                  </td>
+                  <td style={{ ...S.td, textAlign: 'center' }}>
+                    {(() => {
+                      const rsc = RESOLUTION_COLORS[r.resolution_status] || r.final_conclusion || ''
+                      const color = (RESOLUTION_TAG_COLORS as any)[rsc] || '#999'
+                      return <span style={{ padding: '2px 8px', borderRadius: 4, fontSize: 11, background: `${color}1a`, color, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.resolution_label || '—'}</span>
+                    })()}
                   </td>
                   <td style={{ ...S.td, textAlign: 'center', fontSize: 12 }}>{r.material_submitted || 0}/{r.material_total || 0}</td>
                   <td style={{ ...S.td, textAlign: 'center', fontSize: 12 }}>{r.reviewer_done}/{r.reviewer_total}</td>
@@ -614,6 +632,9 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   const [showRecallForm, setShowRecallForm] = useState(false)
   const [recallReason, setRecallReason] = useState('')
   const [recalling, setRecalling] = useState(false)
+  const [editingMeetingTime, setEditingMeetingTime] = useState(false)
+  const [meetingTimeDraft, setMeetingTimeDraft] = useState('')
+  const [savingMeetingTime, setSavingMeetingTime] = useState(false)
 
   useEffect(() => {
     fetch('/project/api/project/users/me', { credentials: 'include' })
@@ -660,6 +681,42 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     } finally {
       setRecalling(false)
     }
+  }
+
+  // 会议时间编辑权限：仅发起人，draft/reviewing 且未发布决议
+  const canEditMeetingTime = currentUser.uuid === rv.creator_uuid &&
+    (rv.status === 'draft' || rv.status === 'reviewing') && !data.resolution
+
+  async function handleSaveMeetingTime() {
+    setSavingMeetingTime(true)
+    try {
+      const ts = meetingTimeDraft ? new Date(meetingTimeDraft).getTime() : 0
+      const res = await api.updateReviewBasicInfo(rv.review_uuid, {
+        operator_uuid: currentUser.uuid,
+        meeting_time: ts,
+      }) as any
+      if (res?.error) { setMsg(res.error); return }
+      setMsg('会议时间已更新')
+      setEditingMeetingTime(false)
+      onRefresh()
+    } catch (e: any) {
+      setMsg(e?.message || '保存失败')
+    } finally {
+      setSavingMeetingTime(false)
+    }
+  }
+
+  function startEditMeetingTime() {
+    // datetime-local 格式: yyyy-MM-ddTHH:mm
+    if (rv.meeting_time > 0) {
+      const d = new Date(rv.meeting_time)
+      const pad = (n: number) => String(n).padStart(2, '0')
+      setMeetingTimeDraft(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`)
+    } else {
+      setMeetingTimeDraft('')
+    }
+    setEditingMeetingTime(true)
+    setMsg('')
   }
 
   async function handleDeleteReview() {
@@ -726,7 +783,19 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
         </div>
         <div style={{ fontSize: 12, color: '#666' }}>
           <span>创建: {rv.created_at ? new Date(rv.created_at).toLocaleString('zh-CN') : '-'}</span>
-          {rv.meeting_time > 0 && <span style={{ marginLeft: 12 }}>会议: {new Date(rv.meeting_time).toLocaleString('zh-CN')}</span>}
+          {editingMeetingTime ? (
+            <span style={{ marginLeft: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span>会议:</span>
+              <input type="datetime-local" style={{ padding: '2px 6px', borderRadius: 4, border: '1px solid #d9d9d9', fontSize: 12 }} value={meetingTimeDraft} onChange={e => setMeetingTimeDraft(e.target.value)} />
+              <button style={{ padding: '2px 8px', borderRadius: 4, border: 'none', background: '#1677ff', color: '#fff', cursor: 'pointer', fontSize: 12 }} onClick={handleSaveMeetingTime} disabled={savingMeetingTime}>{savingMeetingTime ? '保存中…' : '保存'}</button>
+              <button style={{ padding: '2px 8px', borderRadius: 4, border: '1px solid #d9d9d9', background: '#fff', color: '#666', cursor: 'pointer', fontSize: 12 }} onClick={() => { setEditingMeetingTime(false); setMsg('') }}>取消</button>
+            </span>
+          ) : (
+            <span style={{ marginLeft: 12 }}>
+              会议: {rv.meeting_time > 0 ? new Date(rv.meeting_time).toLocaleString('zh-CN') : '未设置'}
+              {canEditMeetingTime && <button style={{ marginLeft: 4, padding: '0 4px', border: 'none', background: 'transparent', color: '#1677ff', cursor: 'pointer', fontSize: 12 }} onClick={startEditMeetingTime}>编辑</button>}
+            </span>
+          )}
         </div>
       </div>
       {/* 撤回评审表单 */}
