@@ -389,12 +389,23 @@ async function fetchMembers() {
  return _memberCache || []
 }
 
-const UserPicker: React.FC<{ value: string; onChange: (u: { uuid: string; name: string }) => void; placeholder?: string }> = ({ value, onChange, placeholder = '搜索用户…' }) => {
+const UserPicker: React.FC<{ value: string; onChange: (u: { uuid: string; name: string }) => void; placeholder?: string; displayName?: string }> = ({ value, onChange, placeholder = '搜索用户…', displayName }) => {
  const [results, setResults] = useState<any[]>([])
  const [open, setOpen] = useState(false)
  const [selName, setSelName] = useState('')
  const timerRef = React.useRef<any>(null)
  const inputRef = React.useRef<HTMLInputElement>(null)
+
+ // 外部 value 清空时同步重置内部状态
+ useEffect(() => {
+   if (!value) {
+     setSelName('')
+     if (inputRef.current) inputRef.current.value = ''
+   }
+ }, [value])
+
+ // 已选用户名：优先用外部传入的 displayName，其次用内部 selName
+ const shownName = value ? (displayName || selName || '') : ''
 
  async function doSearch(k: string) {
  if (k.trim().length < 1) { setResults([]); setOpen(false); return }
@@ -405,9 +416,9 @@ const UserPicker: React.FC<{ value: string; onChange: (u: { uuid: string; name: 
  setOpen(filtered.length > 0)
  }
 
- if (selName && value) {
+ if (shownName) {
  return <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
- <span style={{ fontSize: 12, background: '#e6f4ff', padding: '2px 8px', borderRadius: 3 }}>{selName}</span>
+ <span style={{ fontSize: 12, background: '#e6f4ff', padding: '2px 8px', borderRadius: 3 }}>{shownName}</span>
  <button onClick={() => { onChange({ uuid: '', name: '' }); setSelName(''); if (inputRef.current) inputRef.current.value = '' }} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#ff4d4f', fontSize: 14, padding: 0 }}>×</button>
  </div>
  }

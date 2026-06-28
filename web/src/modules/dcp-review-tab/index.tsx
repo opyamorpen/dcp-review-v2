@@ -408,13 +408,25 @@ const UserPicker: React.FC<{
   value: string
   onChange: (user: { uuid: string; name: string }) => void
   placeholder?: string
-}> = ({ value, onChange, placeholder = '搜索用户姓名或邮箱…' }) => {
+  displayName?: string
+}> = ({ value, onChange, placeholder = '搜索用户姓名或邮箱…', displayName }) => {
   const [results, setResults] = useState<{ uuid: string; name: string; email: string }[]>([])
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [selectedName, setSelectedName] = useState('')
   const timerRef = React.useRef<any>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
+
+  // 外部 value 清空时同步重置内部状态
+  useEffect(() => {
+    if (!value) {
+      setSelectedName('')
+      if (inputRef.current) inputRef.current.value = ''
+    }
+  }, [value])
+
+  // 已选用户名：优先用外部传入的 displayName，其次用内部 selectedName
+  const shownName = value ? (displayName || selectedName || '') : ''
 
   function doSearch(kw: string) {
     if (kw.trim().length < 1) { setResults([]); setOpen(false); return }
@@ -443,11 +455,11 @@ const UserPicker: React.FC<{
   }
 
   // 显示：已选用户名 或 搜索框
-  if (selectedName && value) {
+  if (shownName) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 13, fontWeight: 500, background: '#e6f4ff', padding: '2px 10px', borderRadius: 4 }}>
-          {selectedName}
+          {shownName}
         </span>
         <button
           onClick={handleClear}
@@ -1188,7 +1200,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                             {!role.must_vote && !role.has_veto ? '-' : ''}
                           </td>
                           <td style={S.td}>
-                            <UserPicker value={selected[role.role_name] || ''} onChange={u => { setSelected({ ...selected, [role.role_name]: u.uuid }); setReviewerDirty(true) }} placeholder={isRequired ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'} />
+                            <UserPicker value={selected[role.role_name] || ''} displayName={nameMap[selected[role.role_name] || '']} onChange={u => { setSelected({ ...selected, [role.role_name]: u.uuid }); setReviewerDirty(true) }} placeholder={isRequired ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'} />
                           </td>
                         </tr>
                       )
