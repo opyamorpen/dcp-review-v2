@@ -286,16 +286,16 @@ const App: React.FC = () => {
               style={{ padding: '8px 24px', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 14,
                 borderBottom: reviewType === t ? '2px solid #1677ff' : '2px solid transparent',
                 color: reviewType === t ? '#1677ff' : '#666', fontWeight: reviewType === t ? 600 : 400 }}>
-              {t === 'dcp' ? '📋 DCP 评审' : '🔬 TR 评审'} ({allReviews.filter((r: any) => (r.review_type || 'dcp') === t).length})
+              {t === 'dcp' ? 'DCP 评审' : 'TR 评审'} ({allReviews.filter((r: any) => (r.review_type || 'dcp') === t).length})
             </button>
           ))}
         </div>
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h3 style={{ fontSize: 16, margin: 0 }}>{reviewType === 'tr' ? '🔬' : '📋'} {reviewType === 'tr' ? 'TR' : 'DCP'} 评审列表（{reviews.length}）</h3>
+        <h3 style={{ fontSize: 16, margin: 0 }}>{reviewType === 'tr' ? '' : ''} {reviewType === 'tr' ? 'TR' : 'DCP'} 评审列表（{reviews.length}）</h3>
         <div>
           {hasCreatePerm && <button style={S.btn(true)} onClick={() => setView('create')}>+ 创建评审</button>}
-          <button style={S.btn(false)} onClick={() => loadList(projectUuid)}>🔄 刷新</button>
+          <button style={S.btn(false)} onClick={() => loadList(projectUuid)}>刷新</button>
         </div>
       </div>
       {msg && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#cf1322' }}>{msg}</div>}
@@ -453,7 +453,7 @@ const UserPicker: React.FC<{
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ fontSize: 13, fontWeight: 500, background: '#e6f4ff', padding: '2px 10px', borderRadius: 4 }}>
-          👤 {selectedName}
+          {selectedName}
         </span>
         <button
           onClick={handleClear}
@@ -493,11 +493,14 @@ const UserPicker: React.FC<{
               onMouseEnter={e => { (e.target as HTMLElement).style.background = '#f5f5f5' }}
               onMouseLeave={e => { (e.target as HTMLElement).style.background = 'transparent' }}
             >
-              <span>👤 {u.name}</span>
+              <span>{u.name}</span>
               <span style={{ fontSize: 11, color: '#999' }}>{u.email}</span>
             </div>
           ))}
         </div>
+
+
+
       )}
     </div>
   )
@@ -549,7 +552,7 @@ const CreateReviewForm: React.FC<{ projectUuid: string; projectKey: string; proj
       </div>
       {blocked && (
         <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#fffbe6', border: '1px solid #ffe58f', color: '#ad6800' }}>
-          ⚠️ 前置阶段未通过决议，创建草稿后仍无法正式发起评审。需先通过（决议为"通过"或"有条件通过"）：<strong>{unmetDeps.join(', ')}</strong>
+          前置阶段未通过决议，创建草稿后仍无法正式发起评审。需先通过（决议为"通过"或"有条件通过"）：<strong>{unmetDeps.join(', ')}</strong>
         </div>
       )}
       <div style={S.formGroup}>
@@ -582,12 +585,12 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   const isDone = rv.status === 'completed' || rv.status === 'rejected'
 
   const TABS: { key: TabKey; label: string; badge?: number }[] = [
-    { key: 'materials', label: '📋 评审资料', badge: data.materials?.filter((m: any) => !!m.file_data).length },
-    { key: 'reviewers', label: '👥 评审人与意见', badge: data.reviewers?.filter((r: any) => r.submitted_at > 0).length },
-    { key: 'issues', label: '🔗 关联工作项', badge: data.linked_issues?.length },
-    { key: 'checklist', label: '✅ Checklist', badge: data.checklist?.length },
-    { key: 'resolution', label: '📄 决议快照' },
-    { key: 'audit', label: '📝 审计日志' },
+    { key: 'materials', label: '评审资料', badge: data.materials?.filter((m: any) => !!m.file_data).length },
+    { key: 'reviewers', label: '评审人与意见', badge: data.reviewers?.filter((r: any) => r.submitted_at > 0).length },
+    { key: 'issues', label: '关联工作项', badge: data.linked_issues?.length },
+    { key: 'checklist', label: 'Checklist', badge: data.checklist?.length },
+    { key: 'resolution', label: '决议快照' },
+    { key: 'audit', label: '审计日志' },
   ]
 
   const [showPublishForm, setShowPublishForm] = useState(false)
@@ -664,7 +667,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       <div style={S.topBar}>
         <div style={S.topRow}>
           <div>
-            <span style={{ fontFamily: 'monospace', fontSize: 13, color: '#1677ff', fontWeight: 600, marginRight: 8, cursor: 'pointer' }} title="点击复制编号" onClick={async () => { const ok = await copyReviewLink(rv.review_number || rv.review_uuid, rv.review_uuid); setCopyToast(ok ? '已复制编号' : '复制失败'); setTimeout(() => setCopyToast(''), 2000) }}>{(rv.review_type || 'dcp') === 'tr' ? '🔬' : '📋'} {rv.review_number || ''}</span>
+            <span style={{ fontFamily: 'monospace', fontSize: 13, color: '#1677ff', fontWeight: 600, marginRight: 8, cursor: 'pointer' }} title="点击复制编号" onClick={async () => { const ok = await copyReviewLink(rv.review_number || rv.review_uuid, rv.review_uuid); setCopyToast(ok ? '已复制编号' : '复制失败'); setTimeout(() => setCopyToast(''), 2000) }}>{(rv.review_type || 'dcp') === 'tr' ? '' : ''} {rv.review_number || ''}</span>
             <strong style={{ fontSize: 16 }}>{rv.phase_name || rv.phase_code} — {rv.review_title || ((rv.review_type || 'dcp') === 'tr' ? 'TR评审' : 'DCP评审')}</strong>
             <span style={S.statusTag(sc)}>{sl}</span>
             {data.resolution && <span style={{ marginLeft: 8, fontSize: 12, color: '#666' }}>快照: {data.resolution.snapshot_number}</span>}
@@ -672,11 +675,11 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
           <div>
             {isEditable && <button style={S.btn(true)} onClick={() => onStart(rv.review_uuid)}>▶ 发起评审</button>}
             {isEditable && currentUser.uuid && rv.creator_uuid === currentUser.uuid && (
-              <button style={{ ...S.btn(false), color: '#ff4d4f', borderColor: '#ff4d4f' }} onClick={handleDeleteReview}>🗑 删除</button>
+              <button style={{ ...S.btn(false), color: '#ff4d4f', borderColor: '#ff4d4f' }} onClick={handleDeleteReview}>删除</button>
             )}
-            {isReviewing && !data.resolution && canPublish && <button style={S.btn(true)} onClick={() => { setShowPublishForm(!showPublishForm); setMsg('') }}>{showPublishForm ? '✕ 取消发布' : '📄 生成决议'}</button>}
+            {isReviewing && !data.resolution && canPublish && <button style={S.btn(true)} onClick={() => { setShowPublishForm(!showPublishForm); setMsg('') }}>{showPublishForm ? '× 取消发布' : '生成决议'}</button>}
             {rv.status === 'rejected' && currentUser.uuid && rv.creator_uuid === currentUser.uuid && (
-              <button style={{ ...S.btn(true), background: '#722ed1', borderColor: '#722ed1' }} onClick={handleRecreate}>🔄 重新发起</button>
+              <button style={{ ...S.btn(true), background: '#722ed1', borderColor: '#722ed1' }} onClick={handleRecreate}>重新发起</button>
             )}
           </div>
         </div>
@@ -688,7 +691,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       {/* 发布决议表单（内置，替代 prompt 弹窗） */}
       {showPublishForm && (
         <div style={{ ...S.card, marginBottom: 16, background: '#fff7e6', borderLeft: '4px solid #faad14' }}>
-          <h4 style={S.sectionTitle}>📄 发布决议</h4>
+          <h4 style={S.sectionTitle}>发布决议</h4>
           <div style={{ marginBottom: 8, fontSize: 13, color: '#333' }}>
             {(() => {
               const total = data.reviewers?.length || 0
@@ -714,8 +717,8 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
               return (
                 <div style={{ marginBottom: 8, padding: '6px 12px', borderRadius: 4, fontSize: 13, background: canPass ? '#f6ffed' : '#fff7e6', color: canPass ? '#52c41a' : '#faad14' }}>
                   {canPass
-                    ? `✅ 同意票 ${acceptCount}/${totalCandidates}，满足大多数（≥${minCount}），可决议为「通过」`
-                    : `⚠️ 同意票仅 ${acceptCount}/${totalCandidates}，不满足大多数（需≥${minCount}），不可决议为「通过」`}
+                    ? `同意票 ${acceptCount}/${totalCandidates}，满足大多数（≥${minCount}），可决议为「通过」`
+                    : `同意票仅 ${acceptCount}/${totalCandidates}，不满足大多数（需≥${minCount}），不可决议为「通过」`}
                 </div>
               )
             }
@@ -725,8 +728,8 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
             return (
               <div style={{ marginBottom: 8, padding: '6px 12px', borderRadius: 4, fontSize: 13, background: allDone ? '#f6ffed' : '#fff7e6', color: allDone ? '#52c41a' : '#faad14' }}>
                 {allDone
-                  ? `✅ 全体评审人已提交（${doneCount}/${reviewers.length}），可发布决议`
-                  : `⚠️ 评审进度 ${doneCount}/${reviewers.length}，待全部提交后可发布决议`}
+                  ? `全体评审人已提交（${doneCount}/${reviewers.length}），可发布决议`
+                  : `评审进度 ${doneCount}/${reviewers.length}，待全部提交后可发布决议`}
               </div>
             )
           })()}
@@ -773,7 +776,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
           {(data.checklist || []).length > 0 && <ChecklistInlineTab checklist={data.checklist} />}
           <div style={{ marginTop: 12 }}>
             <button style={{ ...S.btn(true), background: '#faad14' }} onClick={handlePublishResolution} disabled={publishing}>
-              {publishing ? '发布中…' : '📢 发布决议'}
+              {publishing ? '发布中…' : '发布决议'}
             </button>
             <button style={S.btn(false)} onClick={() => { setShowPublishForm(false); setMsg('') }}>取消</button>
           </div>
@@ -939,7 +942,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
                           </label>
                           {hasFile && (
                             <span style={{ fontSize: 11, color: '#52c41a' }} title={`点击预览: ${m.file_name}`}>
-                              📎 <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => previewMaterial(m.template_id, m.file_name)}>{m.file_name}</span>
+                              <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => previewMaterial(m.template_id, m.file_name)}>{m.file_name}</span>
                               <button style={{ fontSize: 10, padding: '1px 6px', border: '1px solid #52c41a', borderRadius: 3, background: '#fff', color: '#52c41a', cursor: 'pointer', marginLeft: 4 }} onClick={() => downloadMaterial(m.template_id)}>下载</button>
                               <button
                                 style={{ fontSize: 10, padding: '1px 6px', border: '1px solid #ff4d4f', borderRadius: 3, background: '#fff', color: '#ff4d4f', cursor: 'pointer', marginLeft: 4 }}
@@ -956,7 +959,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
                         </div>
                       ) : hasFile ? (
                         <span style={{ fontSize: 11, color: '#1677ff' }}>
-                          📎 <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => previewMaterial(m.template_id, m.file_name)}>{m.file_name}</span>
+                          <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => previewMaterial(m.template_id, m.file_name)}>{m.file_name}</span>
                           <button style={{ fontSize: 10, padding: '1px 6px', border: '1px solid #52c41a', borderRadius: 3, background: '#fff', color: '#52c41a', cursor: 'pointer', marginLeft: 4 }} onClick={() => downloadMaterial(m.template_id)}>下载</button>
                         </span>
                       ) : <span style={{ color: '#999', fontSize: 11 }}>—</span>}
@@ -972,7 +975,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <h4 style={S.sectionTitle}>关键指标（{inds.length}项）</h4>
-          {editable && !editInd && <button style={S.btn(false)} onClick={startEditInd}>✏️ 编辑</button>}
+          {editable && !editInd && <button style={S.btn(false)} onClick={startEditInd}>编辑</button>}
         </div>
         <table style={S.table}>
           <thead><tr>
@@ -996,14 +999,17 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
                         <span style={{ fontWeight: 600 }}>{ind.current_value} {tpl?.unit}</span>}
                     </td>
                     <td style={{ ...S.td, textAlign: 'center', fontSize: 12 }}>{riskText}</td>
+
                   </tr>
+
                 )
+
               })}
           </tbody>
         </table>
         {editInd && (
           <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-            <button style={S.btn(true)} onClick={saveInd}>💾 保存</button>
+            <button style={S.btn(true)} onClick={saveInd}>保存</button>
             <button style={S.btn(false)} onClick={() => setEditInd(false)}>取消</button>
           </div>
         )}
@@ -1017,12 +1023,12 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', zIndex: 9999 }} onClick={() => setPreview(null)}>
           <div style={{ background: '#fff', margin: '24px', borderRadius: 8, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', borderBottom: '1px solid #f0f0f0' }}>
-              <strong style={{ fontSize: 14 }}>📄 {preview.name}</strong>
-              <button style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer', color: '#999' }} onClick={() => setPreview(null)}>✕</button>
+              <strong style={{ fontSize: 14 }}>{preview.name}</strong>
+              <button style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer', color: '#999' }} onClick={() => setPreview(null)}>×</button>
             </div>
             {preview.url === '__unsupported__' ? (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-                <div style={{ fontSize: 48, marginBottom: 16 }}>📄</div>
+                <div style={{ fontSize: 48, marginBottom: 16 }}></div>
                 <div style={{ fontSize: 14, marginBottom: 8 }}>该文件格式不支持在线预览</div>
                 <div style={{ fontSize: 12, color: '#ccc' }}>{preview.name}</div>
               </div>
@@ -1097,7 +1103,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <h4 style={S.sectionTitle}>评审人（{reviewers.length}人，已提交 {reviewers.filter((r: any) => r.submitted_at > 0).length}）</h4>
-          {editable && !editMode && <button style={S.btn(false)} onClick={startEdit}>✏️ 编辑评审人</button>}
+          {editable && !editMode && <button style={S.btn(false)} onClick={startEdit}>编辑评审人</button>}
         </div>
         {reviewers.length === 0 ? <div style={{ color: '#999', padding: 20, textAlign: 'center' }}>尚未添加评审人。请在草稿状态下编辑评审人后再发起评审。</div> :
           <table style={S.table}>
@@ -1136,7 +1142,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
               </div>
             ))}
             <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-              <button style={S.btn(true)} onClick={saveReviewers}>💾 保存评审人</button>
+              <button style={S.btn(true)} onClick={saveReviewers}>保存评审人</button>
               <button style={S.btn(false)} onClick={() => setEditMode(false)}>取消</button>
             </div>
           </div>
@@ -1180,7 +1186,7 @@ const LinkedIssuesPanel: React.FC<{ data: any; projectUuid: string; projectKey: 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
           {creatorSummary.map((c, i) => (
             <span key={i} style={{ padding: '2px 10px', borderRadius: 12, background: '#f0f5ff', fontSize: 12, color: '#1677ff' }}>
-              👤 {c.name}: {c.count}个
+              {c.name}: {c.count}个
             </span>
           ))}
         </div>
@@ -1255,8 +1261,8 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
       {/* 决议快照 */}
       <div style={{ ...S.card, borderLeft: '4px solid #1677ff', background: '#f0f5ff' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <h4 style={{ ...S.sectionTitle, margin: 0 }}>📄 决议快照</h4>
-          <span style={{ fontSize: 11, color: '#ff4d4f', background: '#fff2f0', padding: '2px 8px', borderRadius: 4 }}>🔒 不可覆盖</span>
+          <h4 style={{ ...S.sectionTitle, margin: 0 }}>决议快照</h4>
+          <span style={{ fontSize: 11, color: '#ff4d4f', background: '#fff2f0', padding: '2px 8px', borderRadius: 4 }}>不可覆盖</span>
         </div>
         <div style={{ fontSize: 12, color: '#666', marginBottom: 8 }}>
           快照编号: <code>{res.snapshot_number}</code> | 发布时间: {res.published_at ? new Date(res.published_at).toLocaleString('zh-CN') : '-'}
@@ -1303,7 +1309,7 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
             <div key={i} style={{ ...S.card, borderLeft: `3px solid ${s.note_type === 'rectification' ? '#faad14' : '#1677ff'}` }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                 <span style={{ fontWeight: 600, fontSize: 14 }}>
-                  {s.note_type === 'rectification' ? '⚠️ 纠偏说明' : '📝 补充说明'}: {s.note_title}
+                  {s.note_type === 'rectification' ? '纠偏说明' : '补充说明'}: {s.note_title}
                 </span>
                 <span style={{ color: '#999', fontSize: 12 }}>{s.submitted_at ? new Date(s.submitted_at).toLocaleString('zh-CN') : '-'}</span>
               </div>
@@ -1465,7 +1471,7 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
     <div>
       {/* 评审资料 — 只读 */}
       <div style={{ ...S.card, marginBottom: 16 }}>
-        <h4 style={S.sectionTitle}>📋 评审资料（已上传 {mats.filter((m: any) => !!m.file_data).length}/{mats.length}）</h4>
+        <h4 style={S.sectionTitle}>评审资料（已上传 {mats.filter((m: any) => !!m.file_data).length}/{mats.length}）</h4>
         <table style={S.table}>
           <thead><tr>
             <th style={S.th}>材料名称</th><th style={S.th}>责任角色</th>
@@ -1480,7 +1486,7 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
                     <td style={S.td}>{m.template?.responsible_role || '-'}</td>
                     <td style={S.td}>{m.file_name ? (
                       <span style={{ fontSize: 11, color: '#1677ff' }}>
-                        📎 <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => previewMaterial(m.template_id, m.file_name)}>{m.file_name}</span>
+                        <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => previewMaterial(m.template_id, m.file_name)}>{m.file_name}</span>
                         <button style={{ fontSize: 10, padding: '1px 6px', border: '1px solid #52c41a', borderRadius: 3, background: '#fff', color: '#52c41a', cursor: 'pointer', marginLeft: 4 }} onClick={() => downloadMaterial(m.template_id)}>下载</button>
                       </span>
                     ) : <span style={{ color: '#999', fontSize: 11 }}>—</span>}</td>
@@ -1493,11 +1499,14 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
 
       {/* 关键指标 — 只读 */}
       <div style={{ ...S.card, marginBottom: 16 }}>
-        <h4 style={S.sectionTitle}>📊 关键指标（{inds.length}项）</h4>
+        <h4 style={S.sectionTitle}>关键指标（{inds.length}项）</h4>
+
         <table style={S.table}>
           <thead><tr>
+
             <th style={S.th}>指标</th><th style={S.th}>单位</th><th style={{ ...S.th, width: 60, textAlign: 'center' }}>黄</th><th style={{ ...S.th, width: 60, textAlign: 'center' }}>红</th>
             <th style={{ ...S.th, width: 90, textAlign: 'center' }}>当前值</th><th style={{ ...S.th, width: 60, textAlign: 'center' }}>风险</th>
+
           </tr></thead>
           <tbody>
             {inds.length === 0 ? <tr><td colSpan={6} style={{ ...S.td, textAlign: 'center', color: '#999' }}>无</td></tr> :
@@ -1522,7 +1531,7 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
 
       {/* 我的评审意见 */}
       <div style={{ ...S.card, marginBottom: 16, background: '#f0f5ff', borderLeft: '4px solid #1677ff' }}>
-        <h4 style={S.sectionTitle}>✍️ 我的评审意见</h4>
+        <h4 style={S.sectionTitle}>我的评审意见</h4>
         {opinionMsg && <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#cf1322' }}>{opinionMsg}</div>}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <div style={S.formGroup}>
@@ -1560,7 +1569,7 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
 
       {/* 关联工作项 */}
       <div style={S.card}>
-        <h4 style={S.sectionTitle}>🔗 关联工作项（{issues.length}个）</h4>
+        <h4 style={S.sectionTitle}>关联工作项（{issues.length}个）</h4>
         {issues.length === 0 ? <div style={{ color: '#999', padding: 12, textAlign: 'center', fontSize: 13 }}>暂无关联工作项</div> :
           <table style={S.table}>
             <thead><tr>
@@ -1603,12 +1612,12 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', flexDirection: 'column', zIndex: 9999 }} onClick={() => setPreview(null)}>
           <div style={{ background: '#fff', margin: '24px', borderRadius: 8, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', borderBottom: '1px solid #f0f0f0' }}>
-              <strong style={{ fontSize: 14 }}>📄 {preview.name}</strong>
-              <button style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer', color: '#999' }} onClick={() => setPreview(null)}>✕</button>
+              <strong style={{ fontSize: 14 }}>{preview.name}</strong>
+              <button style={{ border: 'none', background: 'none', fontSize: 18, cursor: 'pointer', color: '#999' }} onClick={() => setPreview(null)}>×</button>
             </div>
             {preview.url === '__unsupported__' ? (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#999' }}>
-                <div style={{ fontSize: 48, marginBottom: 16 }}>📄</div>
+                <div style={{ fontSize: 48, marginBottom: 16 }}></div>
                 <div style={{ fontSize: 14, marginBottom: 8 }}>该文件格式不支持在线预览</div>
                 <div style={{ fontSize: 12, color: '#ccc' }}>{preview.name}</div>
               </div>
@@ -1643,7 +1652,7 @@ const ChecklistReadOnly: React.FC<{ checklist: any[] }> = ({ checklist }) => {
 
   return (
     <div style={{ marginBottom: 12, padding: '10px 14px', background: '#fafafa', borderRadius: 6, border: '1px solid #e8e8e8' }}>
-      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>📋 Checklist 概览</div>
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Checklist 概览</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
         {Object.keys(grouped).map(rn => {
           const items = grouped[rn]
@@ -1651,7 +1660,7 @@ const ChecklistReadOnly: React.FC<{ checklist: any[] }> = ({ checklist }) => {
           const total = items.length
           return (
             <div key={rn} style={{ fontSize: 12 }}>
-              <span style={{ fontWeight: 500 }}>👤 {rn}</span>{' '}
+              <span style={{ fontWeight: 500 }}>{rn}</span>{' '}
               <span style={{ color: pass === total ? '#52c41a' : '#faad14' }}>{pass}/{total}</span>
             </div>
           )
@@ -1678,7 +1687,7 @@ const ChecklistInlineTab: React.FC<{ checklist: any[] }> = ({ checklist }) => {
 
   return (
     <div style={{ marginTop: 12 }}>
-      <label style={S.label}>📋 Checklist 详情</label>
+      <label style={S.label}>Checklist 详情</label>
       {Object.keys(grouped).map(rn => {
         const items = grouped[rn]
         const pass = items.filter((i: any) => i.status === 'pass').length
@@ -1691,7 +1700,7 @@ const ChecklistInlineTab: React.FC<{ checklist: any[] }> = ({ checklist }) => {
               onClick={() => setExpanded({ ...expanded, [rn]: !isExpanded })}
             >
               <span>{isExpanded ? '▾' : '▸'}</span>
-              <span>👤 {rn}</span>
+              <span>{rn}</span>
               <span style={{ color: pass === total ? '#52c41a' : '#faad14', marginLeft: 'auto' }}>{pass}/{total}</span>
             </div>
             {isExpanded && items.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map((item: any) => {
@@ -1830,7 +1839,7 @@ const IPDFlowChart: React.FC<{
 
   return (
     <div style={{ marginBottom: 20, padding: '16px 24px', background: '#fff', borderRadius: 8, border: '1px solid #f0f0f0' }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: '#333', marginBottom: 10 }}>📐 IPD 阶段进度</div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: '#333', marginBottom: 10 }}>IPD 阶段进度</div>
       <svg viewBox={`0 0 ${VIEWBOX_W} ${viewBoxH}`} preserveAspectRatio="xMidYMid meet" style={{ width: '100%', height: 240 }}>
         {/* 1. 先画主阶段带 */}
         {stages.map((st: any, idx: number) => {
