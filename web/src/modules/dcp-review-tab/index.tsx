@@ -415,6 +415,8 @@ const UserPicker: React.FC<{
   const [loading, setLoading] = useState(false)
   const [selectedName, setSelectedName] = useState('')
   const timerRef = React.useRef<any>(null)
+  const isComposingRef = React.useRef(false)
+  const inputRef = React.useRef<HTMLInputElement>(null)
 
   function doSearch(kw: string) {
     if (kw.trim().length < 1) { setResults([]); setOpen(false); return }
@@ -427,7 +429,7 @@ const UserPicker: React.FC<{
   }
 
   function handleInput(v: string) {
-    if (!value) setKeyword(v)  // only update keyword when no user selected
+    setKeyword(v)
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => doSearch(v), 300)
   }
@@ -467,9 +469,17 @@ const UserPicker: React.FC<{
   return (
     <div style={{ position: 'relative' }}>
       <input
+        ref={inputRef}
         style={S.input}
         value={keyword}
-        onChange={e => handleInput(e.target.value)}
+        onChange={e => {
+          if (!isComposingRef.current) handleInput(e.target.value)
+        }}
+        onCompositionStart={() => { isComposingRef.current = true }}
+        onCompositionEnd={e => {
+          isComposingRef.current = false
+          handleInput((e.target as HTMLInputElement).value)
+        }}
         onFocus={() => { if (results.length > 0 && keyword.trim().length > 0) setOpen(true) }}
         onBlur={() => setTimeout(() => setOpen(false), 200)}
         placeholder={placeholder}
