@@ -1,0 +1,703 @@
+service:
+  app_id: 709xehle
+  name: DCP评审中心
+  description: 团队级DCP/TR评审插件。支持项目内发起DCP阶段决策评审和TR技术评审、多人异步评审、关联工作项、不可覆盖决议快照和审计追溯。
+  version: 1.13.4
+  mode: org
+  logo: null
+  language: nodejs
+  language_version: 1.11.33
+  host_version: 1.11.33
+  host_sub_version: 1.11.33
+  min_system_version: 3.11.39
+  auth: null
+  config: null
+  scope: 1
+  policy:
+    policy: standard
+    target: ''
+  permission:
+    - name: DCP 插件管理
+      field: dcp_admin
+      desc: 允许修改DCP评审模板、阶段、角色、检查项等全局配置
+    - name: 新建 DCP 评审
+      field: dcp_create_review
+      desc: 允许在项目内新建DCP决策评审单
+    - name: 查看 DCP 评审总览
+      field: dcp_view_review
+      desc: 允许查看团队DCP评审总览页面
+modules:
+  - id: dcp-review-tab
+    moduleType: ones:project:component:new
+    title: DCP评审
+    description: 项目内DCP评审工作台：评审列表、创建评审单、材料/指标/评审人/意见/关联工作项/决议/审计
+    entry: ./modules/dcp-review-tab/index.tsx
+  - id: dcp-reviewer-workspace
+    moduleType: ones:workspace:new
+    title: DCP评审工作台
+    description: 评审人工作台：查看待评审单、填写评审意见、关联工作项
+    entry: modules/dcp-reviewer-workspace/index.html
+  - id: dcp-sidebar
+    moduleType: ones:app:new
+    title: DCP评审中心
+    modules:
+      - id: dcp-template-config
+        title: 模板配置
+        entry: modules/dcp-sidebar/dcp-template-config/index.html
+        permission: dcp_admin
+      - id: dcp-review-overview
+        title: 评审总览
+        entry: modules/dcp-sidebar/dcp-review-overview/index.html
+        permission: dcp_view_review
+abilities:
+  - id: dcp-project-component
+    name: ProjectCustomComponent
+    version: 1.0.0
+    abilityType: ProjectCustomComponent
+    function:
+      copyPluginData: copyPluginDataForDCP
+    relateModule:
+      componentModuleEnter: dcp-review-tab
+    config:
+      - key: component_name
+        label: 组件名称
+        value: DCP评审
+        fieldType: Input
+        show: true
+      - key: component_desc
+        label: 组件描述
+        value: DCP决策评审控制台
+        fieldType: TextArea
+        show: true
+      - key: is_support_copy
+        label: 支持数据复制
+        value: false
+        fieldType: Switch
+        show: false
+  - id: dcp-sidebar-menu
+    name: 侧边栏菜单
+    version: 1.0.0
+    abilityType: SidebarMenu
+    relateModule:
+      systemMenu: dcp-sidebar
+apis:
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/config
+    function: getDcpConfig
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/config
+    function: savePluginConfig
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review
+    function: createReview
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/review/:review_uuid
+    function: getReviewDetail
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/reviews/by-project/:project_uuid
+    function: listReviewsByProject
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/reviews
+    function: getDcpReviews
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/reviews/my
+    function: listMyReviews
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/reviews/team
+    function: listTeamReviews
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/start
+    function: startReview
+  - type: external
+    methods:
+      - DELETE
+    url: /team/:teamUUID/dcp/review/:review_uuid
+    function: deleteReview
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/recreate
+    function: recreateReview
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/material-status
+    function: updateMaterialStatus
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/material-upload
+    function: uploadMaterialFile
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/material-remove
+    function: removeMaterialFile
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/review/:review_uuid/material/:template_id/upload-url
+    function: getMaterialUploadUrl
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/review/:review_uuid/material/:template_id/download-url
+    function: getMaterialDownloadUrl
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/review/:review_uuid/material/:template_id/preview
+    function: getMaterialPreview
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/indicators
+    function: updateIndicators
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/reviewers
+    function: updateReviewers
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/opinion
+    function: submitOpinion
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/link-issue
+    function: linkIssue
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/review/:review_uuid/linked-issues
+    function: getLinkedIssues
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/create-issue
+    function: createIssue
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/project/:project_uuid/issue-types
+    function: listIssueTypes
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/generate-resolution
+    function: generateResolution
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/publish-resolution
+    function: publishResolution
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/supplement
+    function: addSupplement
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/review/:review_uuid/audit-log
+    function: getAuditLog
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/checklist
+    function: checkChecklist
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/debug/reviewer-storage/:review_uuid
+    function: debugReviewerStorage
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/debug/my-reviews
+    function: debugMyReviews
+storage:
+  entities:
+    - name: dcp_base_config
+      attributes:
+        key:
+          type: text
+          length: 64
+          default: ''
+        value:
+          type: text
+          length: 32768
+          default: ''
+    - name: dcp_phase_template
+      attributes:
+        phase_code:
+          type: text
+          length: 16
+          default: ''
+        phase_name:
+          type: text
+          length: 64
+          default: ''
+        resolution_options:
+          type: text
+          length: 4096
+          default: '[]'
+        resolution_template:
+          type: text
+          length: 8192
+          default: ''
+        sort_order:
+          type: integer
+          length: 8
+          default: 0
+        review_type:
+          type: text
+          length: 8
+          default: dcp
+        dependencies:
+          type: text
+          length: 1024
+          default: '[]'
+    - name: dcp_material_template
+      attributes:
+        material_name:
+          type: text
+          length: 128
+          default: ''
+        applicable_phases:
+          type: text
+          length: 512
+          default: '[]'
+        required:
+          type: boolean
+          default: false
+        responsible_role:
+          type: text
+          length: 64
+          default: ''
+        sort_order:
+          type: integer
+          length: 8
+          default: 0
+        review_type:
+          type: text
+          length: 8
+          default: dcp
+    - name: dcp_indicator_template
+      attributes:
+        indicator_name:
+          type: text
+          length: 128
+          default: ''
+        applicable_phases:
+          type: text
+          length: 512
+          default: '[]'
+        unit:
+          type: text
+          length: 16
+          default: ''
+        threshold_type:
+          type: text
+          length: 32
+          default: 达标即通过
+        yellow_threshold:
+          type: float
+          length: 16
+          default: 0
+        red_threshold:
+          type: float
+          length: 16
+          default: 0
+        sort_order:
+          type: integer
+          length: 8
+          default: 0
+        review_type:
+          type: text
+          length: 8
+          default: dcp
+    - name: dcp_reviewer_role
+      attributes:
+        role_name:
+          type: text
+          length: 64
+          default: ''
+        must_vote:
+          type: boolean
+          default: true
+        has_veto:
+          type: boolean
+          default: false
+        sort_order:
+          type: integer
+          length: 8
+          default: 0
+        review_type:
+          type: text
+          length: 8
+          default: dcp
+    - name: dcp_review
+      attributes:
+        review_uuid:
+          type: text
+          length: 64
+          default: ''
+        project_uuid:
+          type: text
+          length: 64
+          default: ''
+        phase_code:
+          type: text
+          length: 16
+          default: ''
+        review_title:
+          type: text
+          length: 256
+          default: ''
+        meeting_time:
+          type: integer
+          length: 16
+          default: 0
+        status:
+          type: text
+          length: 32
+          default: draft
+        creator_uuid:
+          type: text
+          length: 64
+          default: ''
+        created_at:
+          type: integer
+          length: 16
+          default: 0
+        updated_at:
+          type: integer
+          length: 16
+          default: 0
+        review_number:
+          type: text
+          length: 32
+          default: ''
+        reviewers_json:
+          type: text
+          length: 32768
+          default: '[]'
+        checklist_json:
+          type: text
+          length: 32768
+          default: '[]'
+        review_type:
+          type: text
+          length: 8
+          default: dcp
+    - name: dcp_review_material
+      attributes:
+        review_uuid:
+          type: text
+          length: 64
+          default: ''
+        template_id:
+          type: text
+          length: 64
+          default: ''
+        submit_status:
+          type: text
+          length: 32
+          default: pending
+        notes:
+          type: text
+          length: 4096
+          default: ''
+        file_name:
+          type: text
+          length: 256
+          default: ''
+        file_data:
+          type: text
+          length: 10485760
+          default: ''
+        file_size:
+          type: integer
+          length: 16
+          default: 0
+        uploaded_at:
+          type: integer
+          length: 16
+          default: 0
+        updated_by:
+          type: text
+          length: 64
+          default: ''
+        updated_at:
+          type: integer
+          length: 16
+          default: 0
+    - name: dcp_review_indicator
+      attributes:
+        review_uuid:
+          type: text
+          length: 64
+          default: ''
+        template_id:
+          type: text
+          length: 64
+          default: ''
+        current_value:
+          type: float
+          length: 16
+          default: 0
+        notes:
+          type: text
+          length: 2048
+          default: ''
+        risk_color:
+          type: text
+          length: 16
+          default: green
+        updated_by:
+          type: text
+          length: 64
+          default: ''
+        updated_at:
+          type: integer
+          length: 16
+          default: 0
+    - name: dcp_review_reviewer
+      attributes:
+        review_uuid:
+          type: text
+          length: 64
+          default: ''
+        reviewer_uuid:
+          type: text
+          length: 64
+          default: ''
+        role_name:
+          type: text
+          length: 64
+          default: ''
+        conclusion:
+          type: text
+          length: 32
+          default: ''
+        risk_level:
+          type: text
+          length: 16
+          default: medium
+        opinion_summary:
+          type: text
+          length: 32768
+          default: ''
+        submitted_at:
+          type: integer
+          length: 16
+          default: 0
+    - name: dcp_linked_issue
+      attributes:
+        review_uuid:
+          type: text
+          length: 64
+          default: ''
+        issue_uuid:
+          type: text
+          length: 64
+          default: ''
+        issue_number:
+          type: text
+          length: 32
+          default: ''
+        issue_title:
+          type: text
+          length: 256
+          default: ''
+        issue_type:
+          type: text
+          length: 32
+          default: ''
+        issue_status:
+          type: text
+          length: 32
+          default: ''
+        linked_by:
+          type: text
+          length: 64
+          default: ''
+        linked_by_name:
+          type: text
+          length: 64
+          default: ''
+        linked_at:
+          type: integer
+          length: 16
+          default: 0
+    - name: dcp_resolution
+      attributes:
+        review_uuid:
+          type: text
+          length: 64
+          default: ''
+        resolution_result:
+          type: text
+          length: 64
+          default: ''
+        final_conclusion:
+          type: text
+          length: 64
+          default: ''
+        resolution_body:
+          type: text
+          length: 8192
+          default: ''
+        generated_by:
+          type: text
+          length: 64
+          default: ''
+        generated_at:
+          type: integer
+          length: 16
+          default: 0
+        condition_notes:
+          type: text
+          length: 8192
+          default: ''
+        based_on_votes:
+          type: text
+          length: 65535
+          default: ''
+        snapshot_number:
+          type: text
+          length: 32
+          default: ''
+        published_by:
+          type: text
+          length: 64
+          default: ''
+        published_by_name:
+          type: text
+          length: 64
+          default: ''
+        published_at:
+          type: integer
+          length: 16
+          default: 0
+    - name: dcp_supplement
+      attributes:
+        review_uuid:
+          type: text
+          length: 64
+          default: ''
+        note_type:
+          type: text
+          length: 16
+          default: supplement
+        note_title:
+          type: text
+          length: 128
+          default: ''
+        note_content:
+          type: text
+          length: 8192
+          default: ''
+        submitted_by:
+          type: text
+          length: 64
+          default: ''
+        submitted_at:
+          type: integer
+          length: 16
+          default: 0
+    - name: dcp_audit_log
+      attributes:
+        review_uuid:
+          type: text
+          length: 64
+          default: ''
+        timestamp:
+          type: integer
+          length: 16
+          default: 0
+        operator_uuid:
+          type: text
+          length: 64
+          default: ''
+        action:
+          type: text
+          length: 32
+          default: ''
+        target:
+          type: text
+          length: 128
+          default: ''
+        detail:
+          type: text
+          length: 2048
+          default: ''
+        result:
+          type: text
+          length: 16
+          default: success
+    - name: dcp_checklist_item
+      attributes:
+        phase_code:
+          type: text
+          length: 16
+          default: ''
+        role_name:
+          type: text
+          length: 64
+          default: ''
+        item_text:
+          type: text
+          length: 256
+          default: ''
+        sort_order:
+          type: integer
+          length: 4
+          default: 0
+        review_type:
+          type: text
+          length: 8
+          default: dcp
+    - name: dcp_checklist_result
+      attributes:
+        review_uuid:
+          type: text
+          length: 64
+          default: ''
+        template_id:
+          type: text
+          length: 64
+          default: ''
+        status:
+          type: text
+          length: 16
+          default: unchecked
+        checked_by:
+          type: text
+          length: 64
+          default: ''
+        checked_at:
+          type: integer
+          length: 16
+          default: 0
