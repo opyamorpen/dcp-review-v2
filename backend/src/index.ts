@@ -1118,7 +1118,7 @@ export async function startReview(req: any): Promise<PluginResponse> {
     }
   }
 
-  // 校验 1：所有 must_vote 角色都已指定评审人
+  // 校验 1：所有 must_vote 或 has_veto 角色都已指定评审人
   const snapReviewers = jsonArr((rv as any).reviewers_json || '[]')
   const reviewers = snapReviewers.length > 0 ? snapReviewers
     : await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
@@ -1126,9 +1126,9 @@ export async function startReview(req: any): Promise<PluginResponse> {
     return { body: { error: '请先添加评审人' }, statusCode: 400 }
   }
   const roleTemplates = filterRolesByType(await qAll(roleTpl), reviewType)
-  const mustVoteRoles = roleTemplates.filter((rt: any) => rt.must_vote)
+  const requiredRoles = roleTemplates.filter((rt: any) => rt.must_vote || rt.has_veto)
   const missingRoles: string[] = []
-  for (const rt of mustVoteRoles) {
+  for (const rt of requiredRoles) {
     const hasReviewer = reviewers.some((rvr: any) => rvr.role_name === rt.role_name)
     if (!hasReviewer) missingRoles.push(rt.role_name)
   }
@@ -1471,6 +1471,14 @@ export async function updateReviewers(req: any): Promise<PluginResponse> {
     if (!roleNames.has(r.role_name)) {
       return { body: { error: `未知评审角色：${r.role_name}` }, statusCode: 400 }
     }
+  }
+
+  // 校验：必投或否决权角色必须指定评审人
+  const requiredRoles = roleTemplates.filter((rt: any) => rt.must_vote || rt.has_veto)
+  const submittedRoleNames = new Set(normalized.map((r: any) => r.role_name))
+  const missingRequired = requiredRoles.filter((rt: any) => !submittedRoleNames.has(rt.role_name)).map((rt: any) => rt.role_name)
+  if (missingRequired.length > 0) {
+    return { body: { error: `以下角色为必选，请先指定评审人：${missingRequired.join('、')}` }, statusCode: 400 }
   }
 
   // 按 sort_order 排序，稳定 key

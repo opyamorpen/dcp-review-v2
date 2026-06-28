@@ -1114,6 +1114,17 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
     setSelected(sel); setEditMode(true)
   }
   async function saveReviewers() {
+    // 客户端校验：必投或否决权角色必须选择评审人
+    const missingRequired: string[] = []
+    for (const role of roles) {
+      if ((role.must_vote || role.has_veto) && !(selected[role.role_name] || '').trim()) {
+        missingRequired.push(role.role_name)
+      }
+    }
+    if (missingRequired.length > 0) {
+      alert(`以下角色为必选，请选择评审人：\n${missingRequired.join('、')}`)
+      return
+    }
     const list = Object.entries(selected).filter(([, uid]) => uid.trim()).map(([role, uid]) => ({ role_name: role, reviewer_uuid: uid }))
     setEditMode(false)
     try {
@@ -1177,14 +1188,20 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
         {editMode && (
           <div style={{ marginTop: 12 }}>
             <h4 style={S.sectionTitle}>编辑评审人</h4>
-            {roles.map((role: any) => (
+            {roles.map((role: any) => {
+              const isRequired = role.must_vote || role.has_veto
+              return (
               <div key={role.role_name} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ width: 120, fontWeight: 500 }}>{role.role_name}</span>
+                <span style={{ width: 120, fontWeight: 500 }}>
+                  {isRequired && <span style={{ color: '#ff4d4f', marginRight: 2 }}>*</span>}
+                  {role.role_name}
+                </span>
                 <div style={{ flex: 1 }}>
-                  <UserPicker value={selected[role.role_name] || ''} onChange={u => setSelected({ ...selected, [role.role_name]: u.uuid })} placeholder="搜索评审人…" />
+                  <UserPicker value={selected[role.role_name] || ''} onChange={u => setSelected({ ...selected, [role.role_name]: u.uuid })} placeholder={isRequired ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'} />
                 </div>
               </div>
-            ))}
+              )
+            })}
             <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
               <button style={S.btn(true)} onClick={saveReviewers}>保存评审人</button>
               <button style={S.btn(false)} onClick={() => setEditMode(false)}>取消</button>
