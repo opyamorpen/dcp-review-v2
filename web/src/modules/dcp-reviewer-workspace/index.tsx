@@ -181,6 +181,7 @@ const App: React.FC = () => {
  const [doneReviews, setDoneReviews] = useState<any[]>([])
  const [myTab, setMyTab] = useState<'pending' | 'resolution' | 'done'>('pending')
  const [selected, setSelected] = useState<any>(null)
+ const [detailMode, setDetailMode] = useState<'review' | 'resolution' | 'readonly'>('review')
  const [directLink, setDirectLink] = useState(false)
  const [filterNumber, setFilterNumber] = useState('')
  const [filterPhase, setFilterPhase] = useState('')
@@ -223,11 +224,12 @@ const App: React.FC = () => {
  finally { setLoading(false) }
  }
 
- async function openReview(rv: any) {
+ async function openReview(rv: any, mode?: 'review' | 'resolution' | 'readonly') {
  setLoading(true)
  try {
  const data = await callApi(`/dcp/review/${rv.review_uuid}`)
  setSelected(data)
+ if (mode) setDetailMode(mode)
  } catch (e: any) { setMsg(`加载评审详情失败: ${e.message}`) }
  finally { setLoading(false) }
  }
@@ -240,7 +242,8 @@ const App: React.FC = () => {
  data={selected}
  currentUser={currentUser}
  directLink={directLink}
- onBack={() => { setSelected(null); setDirectLink(false); init() }}
+ mode={detailMode}
+ onBack={() => { setSelected(null); setDirectLink(false); setDetailMode('review'); init() }}
  onRefresh={async () => {
  const data = await callApi(`/dcp/review/${selected.review.review_uuid}`)
  setSelected(data)
@@ -330,7 +333,7 @@ const App: React.FC = () => {
  </tr></thead>
  <tbody>
  {filteredReviews.map((r: any, i: number) => (
- <tr key={i} style={{ cursor: 'pointer' }} onClick={() => openReview(r)}>
+ <tr key={i} style={{ cursor: 'pointer' }} onClick={() => openReview(r, myTab === 'pending' ? 'review' : myTab === 'resolution' ? 'resolution' : 'readonly')}>
  <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 12, color: '#1677ff', fontWeight: 600 }}>
  <span style={{ cursor: 'pointer' }} title="点击复制编号" onClick={(e) => { e.stopPropagation(); copyReviewLink(r.review_number || r.review_uuid, r.review_uuid) }}>{r.review_number || '-'}</span>
  </td>
@@ -348,7 +351,7 @@ const App: React.FC = () => {
  </td>
  {myTab === 'resolution' && (
  <td style={{ ...S.td, textAlign: 'center' }}>
- <button style={{ ...S.btn(true), fontSize: 12, padding: '2px 10px' }} onClick={(e) => { e.stopPropagation(); openReview(r) }}>去发布决议</button>
+ <button style={{ ...S.btn(true), fontSize: 12, padding: '2px 10px' }} onClick={(e) => { e.stopPropagation(); openReview(r, 'resolution') }}>去发布决议</button>
  </td>
  )}
  {myTab === 'done' && (
@@ -440,9 +443,10 @@ const ReviewerWorkspace: React.FC<{
  data: any
  currentUser: { uuid: string; name: string }
  directLink?: boolean
+ mode?: 'review' | 'resolution' | 'readonly'
  onBack: () => void
  onRefresh: () => void
-}> = ({ data, currentUser, directLink, onBack, onRefresh }) => {
+}> = ({ data, currentUser, directLink, mode = 'review', onBack, onRefresh }) => {
  const mats = data.materials || []
  const inds = data.indicators || []
  const rv = data.review
@@ -490,6 +494,41 @@ const ReviewerWorkspace: React.FC<{
    }).catch(() => {})
  }, [_rvReviewType])
  const canPublish = !!resolutionRule && (resolutionRule.publisher?.role || '') === myRole
+
+// 前端复用 isResolutionReady 逻辑（与后端 listMyReviews 保持一致）
+// 排除决议角色——决议人不参与前置评审提交判断
+const resolutionReady = (() => {
+  if (!resolutionRule) return false
+  const publisherRole = resolutionRule.publisher?.role || (Array.isArray(resolutionRule.publisher?.roles) ? resolutionRule.publisher.roles[0] : '') || ''
+  const frontReviewers = publisherRole ? reviewers.filter((r: any) => r.role_name !== publisherRole) : reviewers
+  const submitMode = resolutionRule?.submitRequirement?.mode || 'must_vote_roles'
+  if (submitMode === 'publisher_only') return true
+  if (submitMode === 'all_reviewers') {
+    return frontReviewers.length > 0 && frontReviewers.every((r: any) => r.submitted_at > 0)
+  }
+  if (submitMode === 'vote_scope_roles') {
+    const scope = resolutionRule.passRule?.voteScope || {}
+    const vsMode = scope.mode || 'must_vote_roles'
+    const excludeRoles = scope.excludeRoles || []
+    const selectedRoles = scope.selectedRoles || []
+    let scopeRoleNames: string[]
+    if (vsMode === 'all_reviewers') scopeRoleNames = configRoles.map((r: any) => r.role_name)
+    else if (vsMode === 'selected_roles') scopeRoleNames = configRoles.filter((r: any) => selectedRoles.includes(r.role_name)).map((r: any) => r.role_name)
+    else scopeRoleNames = configRoles.filter((r: any) => r.must_vote).map((r: any) => r.role_name)
+    scopeRoleNames = scopeRoleNames.filter((n: string) => !excludeRoles.includes(n))
+    const scopeReviewers = frontReviewers.filter((r: any) => scopeRoleNames.includes(r.role_name))
+    if (scopeReviewers.length === 0) return false
+    return scopeReviewers.every((r: any) => r.submitted_at > 0)
+  }
+  // must_vote_roles（含 must_vote 或 has_veto 的角色）
+  const mustVoteNames = configRoles.filter((r: any) => r.must_vote || r.has_veto).map((r: any) => r.role_name)
+  const mustReviewers = frontReviewers.filter((r: any) => mustVoteNames.includes(r.role_name))
+  if (mustReviewers.length === 0) return false
+  return mustReviewers.every((r: any) => r.submitted_at > 0)
+})()
+
+const isResolutionMode = mode === 'resolution'
+const canPublishResolution = canPublish && rv.status === 'reviewing' && resolutionReady && !data.resolution
 
  // 复制编号到剪贴板
  async function copyReviewLink(reviewNumber: string, reviewUuid: string) {
@@ -950,7 +989,8 @@ const ReviewerWorkspace: React.FC<{
  onRefresh={onRefresh}
  />
 
- {/* 评审意见 */}
+ {/* 评审意见 — 决议模式下不展示，决议人无需填写普通评审意见 */}
+ {!isResolutionMode && (
  <div style={{ ...S.card, background: alreadySubmitted ? '#f6ffed' : '#f0f5ff', borderLeft: `4px solid ${alreadySubmitted ? '#52c41a' : '#1677ff'}` }}>
  <h4 style={S.sectionTitle}>{alreadySubmitted ? '评审意见（已提交）' : '我的评审意见'}</h4>
  {opinionMsg && <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#cf1322' }}>{opinionMsg}</div>}
@@ -1009,12 +1049,12 @@ const ReviewerWorkspace: React.FC<{
  <button style={{ ...S.btn(true), marginTop: 8 }} onClick={submitOpinion}>提交评审意见</button>
  </>
  )}
- </div>
+</div>
+)}
 
- {/* 决议（发布人可见） */}
+{/* 决议（发布人可见） */}
  {(() => {
  const res = data.resolution
- const allSubmitted = reviewers.every((r: any) => r.submitted_at > 0)
  const votes: any[] = res?.based_on_votes ? (() => { try { return JSON.parse(res.based_on_votes) } catch { return [] } })() : []
 
  if (res) {
@@ -1073,7 +1113,7 @@ const ReviewerWorkspace: React.FC<{
  )
  }
 
- if (canPublish && allSubmitted && rv.status === 'reviewing') {
+ if (canPublishResolution) {
  // 待决议：展示发布表单
  return (
  <div style={{ ...S.card, background: '#fff7e6', borderLeft: '4px solid #faad14' }}>
