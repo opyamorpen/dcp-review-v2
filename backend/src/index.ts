@@ -343,7 +343,7 @@ const DEFAULT_IPD_FLOW_LAYOUT = {
 // ============================================================
 const DEFAULT_RESOLUTION_RULES: any = {
   dcp: {
-    publisher: { mode: 'role', roles: ['Chair'] },
+    publisher: { mode: 'single_role', role: 'Chair' },
     submitRequirement: { mode: 'vote_scope_roles' },
     passRule: {
       mode: 'min_approval_count',
@@ -355,7 +355,7 @@ const DEFAULT_RESOLUTION_RULES: any = {
     allowedConclusions: ['pass', 'conditional_pass', 'reject'],
   },
   tr: {
-    publisher: { mode: 'role', roles: [] },
+    publisher: { mode: 'single_role', role: '' },
     submitRequirement: { mode: 'must_vote_roles' },
     passRule: {
       mode: 'all_required_submitted',
@@ -366,6 +366,14 @@ const DEFAULT_RESOLUTION_RULES: any = {
     },
     allowedConclusions: ['pass', 'conditional_pass', 'fail', 'rework'],
   },
+}
+
+// 从规则配置中获取唯一决议角色（兼容旧版 publisher.roles 数组）
+function getPublisherRole(rule: any): string {
+  if (!rule?.publisher) return ''
+  if (rule.publisher.role) return rule.publisher.role
+  if (Array.isArray(rule.publisher.roles) && rule.publisher.roles.length > 0) return rule.publisher.roles[0]
+  return ''
 }
 
 // 深度合并：以默认规则为骨架，savedR 中存在的字段覆盖默认值
@@ -411,7 +419,17 @@ function migrateRuleConfig(saved: any): any {
   const result = JSON.parse(JSON.stringify(saved))
   for (const rt of ['dcp', 'tr']) {
     const rule = result[rt]
-    if (!rule || !rule.passRule) continue
+    if (!rule) continue
+    // 迁移 publisher.roles → publisher.role
+    if (rule.publisher) {
+      if (Array.isArray(rule.publisher.roles) && rule.publisher.roles.length > 0) {
+        rule.publisher.role = rule.publisher.role || rule.publisher.roles[0]
+      }
+      rule.publisher.mode = 'single_role'
+      delete rule.publisher.roles
+    }
+    // passRule 迁移
+    if (!rule.passRule) continue
     const pr = rule.passRule
     // 如果有旧的 excludeRoles 但没有 voteScope，迁移
     if (pr.excludeRoles && !pr.voteScope) {
@@ -507,9 +525,14 @@ function validatePassRule(
 // 决议规则可达性校验（保存配置/发起评审时调用）
 function validateResolutionRuleReachability(rule: any, roleTemplates: any[], reviewType: string): string {
   const rtLabel = reviewType.toUpperCase()
-  // 校验 1：发布角色不能为空
-  if (!rule.publisher?.roles?.length) {
-    return `${rtLabel} 决议发布角色未配置，请至少选择一个允许发布决议的角色。`
+  // 校验 1：决议角色不能为空
+  const publisherRole = getPublisherRole(rule)
+  if (!publisherRole) {
+    return `${rtLabel} 决议角色未配置，请选择一个允许发布决议的角色。`
+  }
+  // 校验 1.5：决议角色必须存在于当前 review_type 的角色模板中
+  if (!roleTemplates.some((rt: any) => rt.role_name === publisherRole)) {
+    return `${rtLabel} 决议角色「${publisherRole}」不在当前${rtLabel}角色列表中，请重新配置。`
   }
   // 校验 2：可选决议结果不能为空
   if (!rule.allowedConclusions?.length) {
@@ -542,6 +565,26 @@ function validateResolutionRuleReachability(rule: any, roleTemplates: any[], rev
     }
   }
   return '' // 校验通过
+}
+
+// 判断评审单是否满足决议前置条件（按 submitRequirement.mode 判断）
+function isResolutionReady(rule: any, reviewers: any[], roleTemplates: any[]): boolean {
+  const submitMode = rule?.submitRequirement?.mode || 'must_vote_roles'
+  if (submitMode === 'publisher_only') return true
+  if (submitMode === 'all_reviewers') {
+    return reviewers.length > 0 && reviewers.every((r: any) => r.submitted_at > 0)
+  }
+  if (submitMode === 'vote_scope_roles') {
+    const scopeNames = resolveVoteScopeRoleNames(rule, roleTemplates)
+    const scopeReviewers = reviewers.filter((r: any) => scopeNames.includes(r.role_name))
+    if (scopeReviewers.length === 0) return false
+    return scopeReviewers.every((r: any) => r.submitted_at > 0)
+  }
+  // must_vote_roles
+  const mustVoteNames = roleTemplates.filter((rt: any) => rt.must_vote || rt.has_veto).map((rt: any) => rt.role_name)
+  const mustReviewers = reviewers.filter((r: any) => mustVoteNames.includes(r.role_name))
+  if (mustReviewers.length === 0) return false
+  return mustReviewers.every((r: any) => r.submitted_at > 0)
 }
 
 // ============================================================
@@ -1055,10 +1098,15 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
     const my = rvrs.find((v: any) => v.reviewer_uuid === reviewerUuid)
     if (!my) continue
     const issues = await qAll(linkedIssue, (v: any) => v.review_uuid === r.review_uuid)
-    const allSubmitted = rvrs.every((v: any) => v.submitted_at > 0)
     const hasResolution = (await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)).length > 0
     const rvType = (r as any).review_type || 'dcp'
-    const canPublish = (resRules[rvType]?.publisher?.roles || []).includes(my.role_name)
+    const rule = resRules[rvType] || {}
+    const publisherRole = getPublisherRole(rule)
+    const isPublisher = publisherRole && my.role_name === publisherRole
+    // 按 submitRequirement 判断是否满足决议条件
+    const allRoleTpls = filterRolesByType(await qAll(roleTpl), rvType)
+    const resolutionReady = isResolutionReady(rule, rvrs, allRoleTpls)
+    const isResolutionPending = !!(isPublisher && resolutionReady && !hasResolution && r.status === 'reviewing')
     const meta = projectMetaMap[r.project_uuid] || {}
     results.push({
       review_uuid: r.review_uuid,
@@ -1078,13 +1126,16 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
       my_role: my.role_name,
       my_submitted: !!(my.submitted_at > 0),
       my_conclusion: my.conclusion || '',
-      resolution_pending: !!(canPublish && allSubmitted && !hasResolution && r.status === 'reviewing'),
+      is_publisher: !!isPublisher,
+      resolution_pending: isResolutionPending,
     })
   }
   results.sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
-  const pending = results.filter(r => !r.my_submitted)
-  const done = results.filter(r => r.my_submitted)
-  return { body: { reviews: results, pending, done } }
+  // 拆分三类：待我评审 / 待我决议 / 已完成
+  const review_pending = results.filter(r => r.status === 'reviewing' && !r.my_submitted && !r.is_publisher)
+  const resolution_pending = results.filter(r => r.resolution_pending)
+  const done = results.filter(r => r.my_submitted || r.status === 'completed' || r.status === 'rejected')
+  return { body: { reviews: results, review_pending, resolution_pending, done, pending: review_pending } }
 }
 
 // ============================================================
@@ -1134,6 +1185,21 @@ export async function startReview(req: any): Promise<PluginResponse> {
   }
   if (missingRoles.length > 0) {
     return { body: { error: `以下角色尚未指定评审人：${missingRoles.join('、')}` }, statusCode: 400 }
+  }
+
+  // 校验 1.2：决议角色必须已指定且唯一
+  const _startRule = await getResolutionRuleByType(reviewType)
+  const _publisherRole = getPublisherRole(_startRule)
+  if (_publisherRole) {
+    const publisherReviewers = reviewers.filter((rvr: any) => rvr.role_name === _publisherRole)
+    if (publisherReviewers.length === 0) {
+      return { body: { error: `决议角色「${_publisherRole}」必须指定 1 名评审人` }, statusCode: 400 }
+    }
+    if (publisherReviewers.length > 1) {
+      return { body: { error: `决议角色「${_publisherRole}」只能指定 1 名评审人` }, statusCode: 400 }
+    }
+  } else {
+    return { body: { error: `${reviewType.toUpperCase()} 决议角色未配置，请先在插件配置中设置。` }, statusCode: 400 }
   }
 
   // 校验 1.5：决议规则可达性校验——按实际评审人检查 minCount 是否可达
@@ -1481,6 +1547,31 @@ export async function updateReviewers(req: any): Promise<PluginResponse> {
     return { body: { error: `以下角色为必选，请先指定评审人：${missingRequired.join('、')}` }, statusCode: 400 }
   }
 
+  // 校验：同一用户不允许担任多个角色
+  const uuidToRoles: Record<string, string[]> = {}
+  for (const r of normalized) {
+    if (!uuidToRoles[r.reviewer_uuid]) uuidToRoles[r.reviewer_uuid] = []
+    uuidToRoles[r.reviewer_uuid].push(r.role_name)
+  }
+  const multiRoleUsers = Object.entries(uuidToRoles).filter(([, roles]) => roles.length > 1)
+  if (multiRoleUsers.length > 0) {
+    const desc = multiRoleUsers.map(([uuid, roles]) => `${uuid}(${roles.join('/')})`).join('、')
+    return { body: { error: `同一评审单中，一个用户不能同时担任多个评审角色：${desc}` }, statusCode: 400 }
+  }
+
+  // 校验：决议角色必须指定且唯一
+  const _rule = await getResolutionRuleByType(_rvType)
+  const publisherRole = getPublisherRole(_rule)
+  if (publisherRole) {
+    const publisherEntries = normalized.filter((r: any) => r.role_name === publisherRole)
+    if (publisherEntries.length === 0) {
+      return { body: { error: `决议角色「${publisherRole}」必须指定 1 名评审人` }, statusCode: 400 }
+    }
+    if (publisherEntries.length > 1) {
+      return { body: { error: `决议角色「${publisherRole}」只能指定 1 名评审人` }, statusCode: 400 }
+    }
+  }
+
   // 按 sort_order 排序，稳定 key
   const ordered = normalized.sort((a, b) => {
     const ai = roleTemplates.find((r: any) => r.role_name === a.role_name)?.sort_order ?? 9999
@@ -1610,30 +1701,30 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
   await writeAudit(rid, reviewer_uuid, '提交评审意见', role_name,
     `评审意见: ${conclusion} | 风险: ${risk_level || 'medium'}`)
 
-  // 检查是否所有评审人已提交 → 通知决议发布人
+  // 检查是否满足决议前置条件 → 通知唯一决议人
   const notCfg2 = await getNotifyConfig()
   if (notCfg2.enabled && notCfg2.on_all_submitted) {
-    // 重读评审单获取最新快照
     const latestRv = await review.get(rid)
     const latestReviewers = jsonArr((latestRv as any).reviewers_json || '[]')
-    const allHave = latestReviewers.length > 0 && latestReviewers.every((r: any) => r.submitted_at > 0 || r.conclusion)
-    if (allHave) {
-      // 按当前评审单的 review_type 获取决议规则，通知允许发布决议的角色
-      const _rvType = (latestRv as any).review_type || 'dcp'
-      const _rule = await getResolutionRuleByType(_rvType)
-      const publisherRoleNames = _rule.publisher.roles || []
-      const publisherUuids = latestReviewers
-        .filter((r: any) => publisherRoleNames.includes(r.role_name))
-        .map((r: any) => r.reviewer_uuid)
-        .filter(Boolean)
-      if (publisherUuids.length > 0) {
-        const phaseName = (latestRv as any).phase_code || ''
-        sendNotification(
-          `${_rvType.toUpperCase()}决议通知 — ${phaseName}`,
-          `「${phaseName}」全体评审人已完成评审，请前往发布决议。`,
-          `${(latestRv as any).project_uuid ? `/project/${(latestRv as any).project_uuid}` : ''}`,
-          publisherUuids,
-        )
+    const _rvType = (latestRv as any).review_type || 'dcp'
+    const _rule = await getResolutionRuleByType(_rvType)
+    const _pubRole = getPublisherRole(_rule)
+    if (_pubRole && latestReviewers.length > 0) {
+      // 按 submitRequirement 判断是否满足决议条件
+      const _allRoleTpls = filterRolesByType(await qAll(roleTpl), _rvType)
+      const _ready = isResolutionReady(_rule, latestReviewers, _allRoleTpls)
+      if (_ready) {
+        // 找到唯一决议人
+        const publisher = latestReviewers.find((r: any) => r.role_name === _pubRole)
+        if (publisher && publisher.reviewer_uuid) {
+          const phaseName = (latestRv as any).phase_code || ''
+          sendNotification(
+            `${_rvType.toUpperCase()}决议通知 — ${phaseName}`,
+            `「${phaseName}」评审已满足决议条件，请前往发布决议。`,
+            `${(latestRv as any).project_uuid ? `/project/${(latestRv as any).project_uuid}` : ''}`,
+            [publisher.reviewer_uuid],
+          )
+        }
       }
     }
   }
@@ -1878,12 +1969,17 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     return { body: { error: '当前用户不是该评审单的评审人，不能发布决议' }, statusCode: 403 }
   }
 
-  // 校验：发布人角色必须在 rule.publisher.roles 中
-  if (!rule.publisher.roles || rule.publisher.roles.length === 0) {
-    return { body: { error: `${reviewType.toUpperCase()} 决议发布角色未配置，请先在插件配置中设置允许发布 ${reviewType.toUpperCase()} 决议的角色。` }, statusCode: 400 }
+  // 校验：发布人角色必须是唯一决议角色
+  const publisherRole = getPublisherRole(rule)
+  if (!publisherRole) {
+    return { body: { error: `${reviewType.toUpperCase()} 决议角色未配置，请先在插件配置中设置允许发布 ${reviewType.toUpperCase()} 决议的角色。` }, statusCode: 400 }
   }
-  if (!rule.publisher.roles.includes(publisherReviewer.role_name)) {
-    return { body: { error: `当前角色「${publisherReviewer.role_name}」无权发布 ${reviewType.toUpperCase()} 决议，允许发布的角色：${rule.publisher.roles.join('、')}` }, statusCode: 403 }
+  const publisherReviewers = allRvrs.filter((r: any) => r.role_name === publisherRole)
+  if (publisherReviewers.length !== 1) {
+    return { body: { error: `决议角色「${publisherRole}」必须且只能指定 1 名评审人` }, statusCode: 400 }
+  }
+  if (publisherReviewers[0].reviewer_uuid !== puuid) {
+    return { body: { error: `当前用户不是该评审单的决议人（决议角色：${publisherRole}），不能发布决议` }, statusCode: 403 }
   }
 
   // 按 review_type 过滤角色模板
@@ -2052,7 +2148,8 @@ export async function checkChecklist(req: any): Promise<PluginResponse> {
   // 决议发布角色不可操作 checklist（按 review_type 规则配置判断）
   const _rvType = (rv as any).review_type || 'dcp'
   const _rule = await getResolutionRuleByType(_rvType)
-  if ((_rule.publisher.roles || []).includes(myReviewer.role_name)) {
+  const _pubRole = getPublisherRole(_rule)
+  if (_pubRole && myReviewer.role_name === _pubRole) {
     return { body: { error: '决议发布角色不可操作 checklist' }, statusCode: 403 }
   }
   if (myReviewer.role_name !== item.role_name) {

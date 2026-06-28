@@ -177,8 +177,9 @@ const App: React.FC = () => {
  const [msg, setMsg] = useState('')
  const [currentUser, setCurrentUser] = useState<{ uuid: string; name: string }>({ uuid: '', name: '' })
  const [pendingReviews, setPendingReviews] = useState<any[]>([])
+ const [resolutionPendingReviews, setResolutionPendingReviews] = useState<any[]>([])
  const [doneReviews, setDoneReviews] = useState<any[]>([])
- const [myTab, setMyTab] = useState<'pending' | 'done'>('pending')
+ const [myTab, setMyTab] = useState<'pending' | 'resolution' | 'done'>('pending')
  const [selected, setSelected] = useState<any>(null)
  const [directLink, setDirectLink] = useState(false)
  const [filterNumber, setFilterNumber] = useState('')
@@ -201,10 +202,11 @@ const App: React.FC = () => {
  }
  if (meUuid) {
  const data = await callApi(`/dcp/reviews/my?reviewer_uuid=${encodeURIComponent(meUuid)}`)
- const allReviews = [...(data.pending || []), ...(data.done || [])]
+ const allReviews = [...(data.review_pending || data.pending || []), ...(data.resolution_pending || []), ...(data.done || [])]
  const projectNameMap = await resolveProjectNames(allReviews)
  const enrich = (arr: any[]) => arr.map(r => ({ ...r, project_name: projectNameMap[r.project_uuid] || r.project_name || r.project_uuid }))
- setPendingReviews(enrich(data.pending || []))
+ setPendingReviews(enrich(data.review_pending || data.pending || []))
+ setResolutionPendingReviews(enrich(data.resolution_pending || []))
  setDoneReviews(enrich(data.done || []))
  }
  // 检查 URL 参数，直接定位评审单
@@ -251,13 +253,19 @@ const App: React.FC = () => {
  <h3 style={{ fontSize: 18, margin: '0 0 20px 0' }}>DCP 评审工作台</h3>
  {currentUser.name && <div style={{ marginBottom: 16, fontSize: 13, color: '#666' }}>{currentUser.name}，你好</div>}
 
- {/* 待办 / 已办 Tab */}
+ {/* 待我评审 / 待我决议 / 已办 Tab */}
  <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid #e8e8e8', marginBottom: 16 }}>
  <button
  onClick={() => setMyTab('pending')}
  style={{ padding: '8px 20px', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 14, borderBottom: myTab === 'pending' ? '2px solid #1677ff' : '2px solid transparent', color: myTab === 'pending' ? '#1677ff' : '#666', fontWeight: myTab === 'pending' ? 600 : 400 }}
  >
- 待办 ({pendingReviews.length})
+ 待我评审 ({pendingReviews.length})
+ </button>
+ <button
+ onClick={() => setMyTab('resolution')}
+ style={{ padding: '8px 20px', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 14, borderBottom: myTab === 'resolution' ? '2px solid #faad14' : '2px solid transparent', color: myTab === 'resolution' ? '#faad14' : '#666', fontWeight: myTab === 'resolution' ? 600 : 400 }}
+ >
+ 待我决议 ({resolutionPendingReviews.length})
  </button>
  <button
  onClick={() => setMyTab('done')}
@@ -268,12 +276,16 @@ const App: React.FC = () => {
  </div>
 
  {(() => {
- const displayReviews = myTab === 'pending' ? pendingReviews : doneReviews
+ const displayReviews = myTab === 'pending' ? pendingReviews : myTab === 'resolution' ? resolutionPendingReviews : doneReviews
  if (displayReviews.length === 0) {
  return (
  <div style={{ ...S.card, textAlign: 'center', padding: 40, color: '#999' }}>
- <div style={{ fontSize: 16, marginBottom: 8 }}>{myTab === 'pending' ? '暂无待办评审' : '暂无已办评审'}</div>
- <div style={{ fontSize: 13 }}>{myTab === 'pending' ? '当有评审单进入评审中状态后，将显示在这里' : '完成评审后，将显示在这里'}</div>
+ <div style={{ fontSize: 16, marginBottom: 8 }}>
+ {myTab === 'pending' ? '暂无待我评审' : myTab === 'resolution' ? '暂无待我决议' : '暂无已办评审'}
+ </div>
+ <div style={{ fontSize: 13 }}>
+ {myTab === 'pending' ? '当有评审单进入评审中状态后，将显示在这里' : myTab === 'resolution' ? '当前置评审人完成评审后，待决议项将显示在这里' : '完成评审后，将显示在这里'}
+ </div>
  </div>
  )
  }
@@ -313,6 +325,7 @@ const App: React.FC = () => {
  <thead><tr>
  <th style={S.th}>编号</th><th style={{ ...S.th, width: 70, textAlign: 'center' }}>类型</th><th style={S.th}>阶段</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 120 }}>项目</th>
  <th style={{ ...S.th, width: 100, textAlign: 'center' }}>评审进度</th>
+ {myTab === 'resolution' && <th style={{ ...S.th, width: 90, textAlign: 'center' }}>操作</th>}
  {myTab === 'done' && <th style={{ ...S.th, width: 80, textAlign: 'center' }}>我的结论</th>}
  </tr></thead>
  <tbody>
@@ -333,6 +346,11 @@ const App: React.FC = () => {
  {r.reviewer_done}/{r.reviewer_total} 已提交
  {r.resolution_pending && <span style={{ display: 'inline-block', marginLeft: 6, padding: '1px 6px', borderRadius: 3, background: '#fff7e6', color: '#faad14', fontSize: 10, fontWeight: 600 }}>待决议</span>}
  </td>
+ {myTab === 'resolution' && (
+ <td style={{ ...S.td, textAlign: 'center' }}>
+ <button style={{ ...S.btn(true), fontSize: 12, padding: '2px 10px' }} onClick={(e) => { e.stopPropagation(); openReview(r) }}>去发布决议</button>
+ </td>
+ )}
  {myTab === 'done' && (
  <td style={{ ...S.td, textAlign: 'center', fontSize: 12 }}>
  <span style={{ color: r.my_conclusion === 'pass' ? '#52c41a' : r.my_conclusion === 'fail' ? '#ff4d4f' : '#faad14' }}>
@@ -460,7 +478,7 @@ const ReviewerWorkspace: React.FC<{
      setConfigRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === _rvReviewType))
    }).catch(() => {})
  }, [_rvReviewType])
- const canPublish = !!resolutionRule && (resolutionRule.publisher?.roles || []).includes(myRole)
+ const canPublish = !!resolutionRule && (resolutionRule.publisher?.role || '') === myRole
 
  // 复制编号到剪贴板
  async function copyReviewLink(reviewNumber: string, reviewUuid: string) {

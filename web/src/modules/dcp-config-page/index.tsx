@@ -632,7 +632,7 @@ const ALL_CONCLUSIONS = [
 
 const ResolutionRuleConfig: React.FC<{ rules: any; roles: any[]; onChange: (v: any) => void; editing: boolean; reviewType: 'dcp' | 'tr' }> = ({ rules, roles, onChange, editing, reviewType }) => {
  const rule = rules[reviewType] || {
- publisher: { mode: 'role', roles: [] },
+ publisher: { mode: 'single_role', role: '' },
  submitRequirement: { mode: 'must_vote_roles' },
  passRule: { mode: reviewType === 'tr' ? 'all_required_submitted' : 'min_approval_count', minCount: 3, excludeRoles: [], approvalConclusions: ['pass', 'conditional_pass'], rejectOnAnyVeto: reviewType === 'tr' },
  allowedConclusions: reviewType === 'tr' ? ['pass', 'conditional_pass', 'fail', 'rework'] : ['pass', 'conditional_pass', 'reject'],
@@ -668,20 +668,23 @@ const ResolutionRuleConfig: React.FC<{ rules: any; roles: any[]; onChange: (v: a
  配置 {reviewType.toUpperCase()} 评审的决议发布权限、提交要求、通过规则和可选决议结果。修改后需保存生效。
  </div>
 
- {/* 1. 发布人角色 */}
+ {/* 1. 决议角色（单选） */}
  <div style={{ marginBottom: 20, padding: 12, background: '#fafafa', borderRadius: 4 }}>
- <div style={{ fontWeight: 600, marginBottom: 8 }}>允许发布决议的角色</div>
+ <div style={{ fontWeight: 600, marginBottom: 8 }}>决议角色</div>
  <div style={{ color: '#999', fontSize: 12, marginBottom: 8 }}>
- 从当前{reviewType.toUpperCase()}角色中选择。未配置时将阻止发布决议并提示先配置。
+ 每条评审单只能有 1 名决议人。这里选择决议角色；具体决议人由评审单中该角色对应的人员决定。
  </div>
  <div>
  {typeRoles.length === 0 && <span style={{ color: '#ff4d4f', fontSize: 12 }}>请先在「评审角色」中配置{reviewType.toUpperCase()}角色</span>}
- {typeRoles.map((r: any) => (
- <span key={r.role_name} style={chipStyle((rule.publisher?.roles || []).includes(r.role_name))}
- onClick={() => editing && toggleArrayItem('publisher.roles', r.role_name)}>
- {r.role_name}{r.must_vote ? ' (必投)' : ''}{r.has_veto ? ' (否决)' : ''}
- </span>
- ))}
+ {typeRoles.map((r: any) => {
+   const sel = (rule.publisher?.role || '') === r.role_name
+   return (
+   <span key={r.role_name} style={chipStyle(sel)}
+   onClick={() => editing && update('publisher.role', sel ? '' : r.role_name)}>
+   {r.role_name}{r.must_vote ? ' (必投)' : ''}{r.has_veto ? ' (否决)' : ''}
+   </span>
+   )
+ })}
  </div>
  </div>
 

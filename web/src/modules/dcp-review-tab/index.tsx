@@ -618,10 +618,10 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     }).catch(() => {})
   }, [rvReviewType])
 
-  // 判断当前用户是否有权发布决议（按规则配置的 publisher.roles）
+  // 判断当前用户是否有权发布决议（按规则配置的唯一决议角色）
   const canPublish = !!resolutionRule && (data.reviewers || []).some((r: any) =>
     r.reviewer_uuid === currentUser.uuid &&
-    (resolutionRule.publisher?.roles || []).includes(r.role_name)
+    (resolutionRule.publisher?.role || '') === r.role_name
   )
 
   async function handleDeleteReview() {
@@ -1090,127 +1090,154 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
 // 评审人与意见面板
 // ============================================================
 const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: boolean; onRefresh: () => void; currentUser: { uuid: string; name: string } }> = ({ data, editable, isReviewing, onRefresh, currentUser }) => {
-  const reviewers = data.reviewers || []
-  const [editMode, setEditMode] = useState(false)
-  const [roles, setRoles] = useState<any[]>([])
-  const [selected, setSelected] = useState<Record<string, string>>({})
-  const [nameMap, setNameMap] = useState<Record<string, string>>({})
-  const reviewType = (data.review?.review_type || 'dcp')
+    const reviewers = data.reviewers || []
+    const [roles, setRoles] = useState<any[]>([])
+    const [selected, setSelected] = useState<Record<string, string>>({})
+    const [nameMap, setNameMap] = useState<Record<string, string>>({})
+    const [reviewerDirty, setReviewerDirty] = useState(false)
+    const [savingReviewers, setSavingReviewers] = useState(false)
+    const reviewType = (data.review?.review_type || 'dcp')
 
-  useEffect(() => {
-    const uuids = reviewers.map((r: any) => r.reviewer_uuid).filter(Boolean)
-    if (uuids.length > 0) {
-      api.resolveReviewerNames(uuids).then(setNameMap)
-    }
-  }, [data.reviewers])
+    useEffect(() => {
+      const uuids = reviewers.map((r: any) => r.reviewer_uuid).filter(Boolean)
+      if (uuids.length > 0) {
+        api.resolveReviewerNames(uuids).then(setNameMap)
+      }
+    }, [data.reviewers])
 
-  useEffect(() => {
-    api.getPluginConfig().then(c => setRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === reviewType))).catch(() => {})
-  }, [reviewType])
+    useEffect(() => {
+      api.getPluginConfig().then(c => setRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === reviewType))).catch(() => {})
+    }, [reviewType])
 
-  function startEdit() {
-    const sel: Record<string, string> = {}
-    reviewers.forEach((r: any) => { sel[r.role_name] = r.reviewer_uuid || '' })
-    setSelected(sel); setEditMode(true)
-  }
-  async function saveReviewers() {
-    // 客户端校验：必投或否决权角色必须选择评审人
-    const missingRequired: string[] = []
-    for (const role of roles) {
-      if ((role.must_vote || role.has_veto) && !(selected[role.role_name] || '').trim()) {
-        missingRequired.push(role.role_name)
+    // 草稿态：角色列表加载后自动回填已有评审人
+    useEffect(() => {
+      if (editable && roles.length > 0) {
+        const sel: Record<string, string> = {}
+        reviewers.forEach((r: any) => { sel[r.role_name] = r.reviewer_uuid || '' })
+        setSelected(sel)
+        setReviewerDirty(false)
+      }
+    }, [roles, editable])
+
+    async function saveReviewers() {
+      // 客户端校验：必投或否决权角色必须选择评审人
+      const missingRequired: string[] = []
+      for (const role of roles) {
+        if ((role.must_vote || role.has_veto) && !(selected[role.role_name] || '').trim()) {
+          missingRequired.push(role.role_name)
+        }
+      }
+      if (missingRequired.length > 0) {
+        alert(`以下角色为必选，请选择评审人：\n${missingRequired.join('、')}`)
+        return
+      }
+      const list = Object.entries(selected).filter(([, uid]) => uid.trim()).map(([role, uid]) => ({ role_name: role, reviewer_uuid: uid }))
+      setSavingReviewers(true)
+      try {
+        const res = await api.updateReviewers(data.review.review_uuid, { reviewers: list, operator_uuid: currentUser.uuid }) as any
+        if (!res?.ok && !res?.data?.ok) {
+          throw new Error(res?.error || res?.data?.error || '保存失败')
+        }
+        setReviewerDirty(false)
+        await new Promise(r => setTimeout(r, 800))
+        onRefresh()
+        setTimeout(async () => {
+          try {
+            const detail = await api.getReviewDetail(data.review.review_uuid)
+            const savedReviewers = detail?.reviewers || []
+            const savedRoles = new Set(savedReviewers.map((r: any) => r.role_name))
+            const missing = list.filter(r => !savedRoles.has(r.role_name)).map(r => r.role_name)
+            if (missing.length > 0) {
+              alert(`评审人保存后刷新校验异常，缺失角色：${missing.join('、')}\n请重新打开编辑并保存。`)
+            }
+          } catch {}
+        }, 1200)
+      } catch (e: any) {
+        alert(e?.message || e?.data?.error || '保存失败')
+        onRefresh()
+      } finally {
+        setSavingReviewers(false)
       }
     }
-    if (missingRequired.length > 0) {
-      alert(`以下角色为必选，请选择评审人：\n${missingRequired.join('、')}`)
-      return
-    }
-    const list = Object.entries(selected).filter(([, uid]) => uid.trim()).map(([role, uid]) => ({ role_name: role, reviewer_uuid: uid }))
-    setEditMode(false)
-    try {
-      const res = await api.updateReviewers(data.review.review_uuid, { reviewers: list, operator_uuid: currentUser.uuid }) as any
-      if (!res?.ok && !res?.data?.ok) {
-        throw new Error(res?.error || res?.data?.error || '保存失败')
-      }
-      // 延迟刷新后校验持久化结果
-      await new Promise(r => setTimeout(r, 800))
-      onRefresh()
-      setTimeout(async () => {
-        try {
-          const detail = await api.getReviewDetail(data.review.review_uuid)
-          const savedReviewers = detail?.reviewers || []
-          const savedRoles = new Set(savedReviewers.map((r: any) => r.role_name))
-          const missing = list.filter(r => !savedRoles.has(r.role_name)).map(r => r.role_name)
-          if (missing.length > 0) {
-            alert(`评审人保存后刷新校验异常，缺失角色：${missing.join('、')}\n请重新打开编辑并保存。`)
-          }
-        } catch {}
-      }, 1200)
-    } catch (e: any) {
-      alert(e?.message || e?.data?.error || '保存失败')
-      onRefresh()
-    }
-  }
 
-  return (
-    <div>
-      {/* 评审人清单 */}
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h4 style={S.sectionTitle}>评审人（{reviewers.length}人，已提交 {reviewers.filter((r: any) => r.submitted_at > 0).length}）</h4>
-          {editable && !editMode && <button style={S.btn(false)} onClick={startEdit}>编辑评审人</button>}
-        </div>
-        {reviewers.length === 0 ? <div style={{ color: '#999', padding: 20, textAlign: 'center' }}>尚未添加评审人。请在草稿状态下编辑评审人后再发起评审。</div> :
-          <table style={S.table}>
-            <thead><tr>
-              <th style={S.th}>角色</th><th style={S.th}>评审人</th><th style={{ ...S.th, width: 100, textAlign: 'center' }}>结论</th>
-              <th style={{ ...S.th, width: 70, textAlign: 'center' }}>风险</th>
-              <th style={S.th}>意见摘要</th>
-              <th style={{ ...S.th, width: 70, textAlign: 'center' }}>状态</th>
-            </tr></thead>
-            <tbody>
-              {reviewers.map((r: any, i: number) => (
-                <tr key={i}>
-                  <td style={{ ...S.td, fontWeight: 500 }}>{r.role_name}</td>
-                  <td style={S.td}>{nameMap[r.reviewer_uuid] || r.reviewer_uuid || '-'}</td>
-                  <td style={{ ...S.td, textAlign: 'center' }}>{r.conclusion ? CONCLUSION_LABELS[r.conclusion] || r.conclusion : '-'}</td>
-                  <td style={{ ...S.td, textAlign: 'center' }}>{r.risk_level === 'low' ? '低' : r.risk_level === 'medium' ? '中' : r.risk_level === 'high' ? '高' : r.submitted_at > 0 ? (r.risk_level || '中') : '—'}</td>
-                  <td style={{ ...S.td, fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.opinion_summary || '-'}</td>
-                  <td style={{ ...S.td, textAlign: 'center' }}>
-                    <span style={{ padding: '2px 6px', borderRadius: 4, fontSize: 11, background: r.submitted_at > 0 ? '#f6ffed' : '#fafafa', color: r.submitted_at > 0 ? '#52c41a' : '#999' }}>
-                      {r.submitted_at > 0 ? '已提交' : '待提交'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>}
-        {editMode && (
-          <div style={{ marginTop: 12 }}>
-            <h4 style={S.sectionTitle}>编辑评审人</h4>
-            {roles.map((role: any) => {
-              const isRequired = role.must_vote || role.has_veto
-              return (
-              <div key={role.role_name} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ width: 120, fontWeight: 500 }}>
-                  {isRequired && <span style={{ color: '#ff4d4f', marginRight: 2 }}>*</span>}
-                  {role.role_name}
-                </span>
-                <div style={{ flex: 1 }}>
-                  <UserPicker value={selected[role.role_name] || ''} onChange={u => setSelected({ ...selected, [role.role_name]: u.uuid })} placeholder={isRequired ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'} />
-                </div>
-              </div>
-              )
-            })}
-            <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-              <button style={S.btn(true)} onClick={saveReviewers}>保存评审人</button>
-              <button style={S.btn(false)} onClick={() => setEditMode(false)}>取消</button>
-            </div>
+    return (
+      <div>
+        {/* 评审人区域 */}
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h4 style={S.sectionTitle}>评审人（{reviewers.length}人，已提交 {reviewers.filter((r: any) => r.submitted_at > 0).length}）</h4>
           </div>
-        )}
+
+          {editable ? (
+            /* 草稿态：直接可编辑 */
+            <div>
+              {roles.length === 0 ? <div style={{ color: '#999', padding: 20, textAlign: 'center' }}>正在加载角色配置…</div> : (
+                <table style={S.table}>
+                  <thead><tr>
+                    <th style={S.th}>角色</th><th style={{ ...S.th, width: 100 }}>角色属性</th><th style={S.th}>评审人</th>
+                  </tr></thead>
+                  <tbody>
+                    {roles.map((role: any) => {
+                      const isRequired = role.must_vote || role.has_veto
+                      return (
+                        <tr key={role.role_name}>
+                          <td style={{ ...S.td, fontWeight: 500 }}>
+                            {isRequired && <span style={{ color: '#ff4d4f', marginRight: 2 }}>*</span>}
+                            {role.role_name}
+                          </td>
+                          <td style={{ ...S.td, fontSize: 11, color: '#999' }}>
+                            {role.must_vote ? '必投' : ''}{role.must_vote && role.has_veto ? ' / ' : ''}{role.has_veto ? '否决' : ''}
+                            {!role.must_vote && !role.has_veto ? '-' : ''}
+                          </td>
+                          <td style={S.td}>
+                            <UserPicker value={selected[role.role_name] || ''} onChange={u => { setSelected({ ...selected, [role.role_name]: u.uuid }); setReviewerDirty(true) }} placeholder={isRequired ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'} />
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+              <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button style={S.btn(true)} onClick={saveReviewers} disabled={savingReviewers || roles.length === 0}>
+                  {savingReviewers ? '保存中…' : '保存评审人'}
+                </button>
+                {reviewerDirty && <span style={{ color: '#faad14', fontSize: 12 }}>评审人配置有未保存修改</span>}
+              </div>
+            </div>
+          ) : (
+            /* 非草稿态：只读 */
+            <>
+              {reviewers.length === 0 ? <div style={{ color: '#999', padding: 20, textAlign: 'center' }}>尚未添加评审人。</div> :
+                <table style={S.table}>
+                  <thead><tr>
+                    <th style={S.th}>角色</th><th style={S.th}>评审人</th><th style={{ ...S.th, width: 100, textAlign: 'center' }}>结论</th>
+                    <th style={{ ...S.th, width: 70, textAlign: 'center' }}>风险</th>
+                    <th style={S.th}>意见摘要</th>
+                    <th style={{ ...S.th, width: 70, textAlign: 'center' }}>状态</th>
+                  </tr></thead>
+                  <tbody>
+                    {reviewers.map((r: any, i: number) => (
+                      <tr key={i}>
+                        <td style={{ ...S.td, fontWeight: 500 }}>{r.role_name}</td>
+                        <td style={S.td}>{nameMap[r.reviewer_uuid] || r.reviewer_uuid || '-'}</td>
+                        <td style={{ ...S.td, textAlign: 'center' }}>{r.conclusion ? CONCLUSION_LABELS[r.conclusion] || r.conclusion : '-'}</td>
+                        <td style={{ ...S.td, textAlign: 'center' }}>{r.risk_level === 'low' ? '低' : r.risk_level === 'medium' ? '中' : r.risk_level === 'high' ? '高' : r.submitted_at > 0 ? (r.risk_level || '中') : '—'}</td>
+                        <td style={{ ...S.td, fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.opinion_summary || '-'}</td>
+                        <td style={{ ...S.td, textAlign: 'center' }}>
+                          <span style={{ padding: '2px 6px', borderRadius: 4, fontSize: 11, background: r.submitted_at > 0 ? '#f6ffed' : '#fafafa', color: r.submitted_at > 0 ? '#52c41a' : '#999' }}>
+                            {r.submitted_at > 0 ? '已提交' : '待提交'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>}
+            </>
+          )}
+        </div>
       </div>
-    </div>
-  )
+    )
 }
 
 // ============================================================
