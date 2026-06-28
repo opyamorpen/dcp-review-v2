@@ -1132,8 +1132,9 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
   }
   results.sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
   // 拆分三类：待我评审 / 待我决议 / 已完成
+  // 决议人在前置评审完成前也进入"待我决议"，但 resolution_pending=false 表示尚未可发布
   const review_pending = results.filter(r => r.status === 'reviewing' && !r.my_submitted && !r.is_publisher)
-  const resolution_pending = results.filter(r => r.resolution_pending)
+  const resolution_pending = results.filter(r => r.status === 'reviewing' && r.is_publisher && !r.my_submitted)
   const done = results.filter(r => r.my_submitted || r.status === 'completed' || r.status === 'rejected')
   return { body: { reviews: results, review_pending, resolution_pending, done, pending: review_pending } }
 }
