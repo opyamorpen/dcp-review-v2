@@ -257,7 +257,7 @@ const PhaseTemplates: React.FC<{ phases: any[]; allPhases: any[]; onChange: (v: 
 // ============================================================
 const MaterialTemplates: React.FC<{ items: any[]; onChange: (v: any[]) => void; editing: boolean; phaseObjs: { code: string; name: string }[] }> = ({ items, onChange, editing, phaseObjs }) => {
  function add() {
- onChange([...items, { material_name: '', applicable_phases: '[]', required: true, responsible_role: '', sort_order: items.length }])
+ onChange([...items, { material_name: '', applicable_phases: '[]', required: true, sort_order: items.length }])
  }
  function update(idx: number, key: string, value: any) {
  const list = [...items]; list[idx] = { ...list[idx], [key]: value }; onChange(list)
@@ -276,7 +276,6 @@ const MaterialTemplates: React.FC<{ items: any[]; onChange: (v: any[]) => void; 
  <label style={{ fontSize: 12, whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
  <input type="checkbox" checked={m.required} onChange={e => update(i, 'required', e.target.checked)} disabled={!editing} />必交
  </label>
- <input style={{ ...S.input, width: 100 }} value={m.responsible_role} onChange={e => update(i, 'responsible_role', e.target.value)} placeholder="责任角色" disabled={!editing} />
  {editing && <button style={S.delBtn} onClick={() => remove(i)}>×</button>}
  </div>
  ))}

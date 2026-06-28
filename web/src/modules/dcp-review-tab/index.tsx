@@ -941,17 +941,16 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
         <h4 style={S.sectionTitle}>交付物清单（已上传 {mats.filter((m: any) => !!m.file_data).length}/{mats.length}）</h4>
         <table style={S.table}>
           <thead><tr>
-            <th style={S.th}>材料名称</th><th style={S.th}>责任角色</th>
+            <th style={S.th}>材料名称</th>
             <th style={{ ...S.th, width: 360 }}>附件</th>
           </tr></thead>
           <tbody>
-            {mats.length === 0 ? <tr><td colSpan={3} style={{ ...S.td, textAlign: 'center', color: '#999' }}>无交付物</td></tr> :
+            {mats.length === 0 ? <tr><td colSpan={2} style={{ ...S.td, textAlign: 'center', color: '#999' }}>无交付物</td></tr> :
               mats.map((m: any, i: number) => {
                 const hasFile = !!(m.file_name)
                 return (
                   <tr key={i}>
                     <td style={S.td}>{m.template?.required ? <span style={{ color: '#ff4d4f', marginRight: 4 }}>*</span> : ''}{m.template?.material_name || m.template_id}</td>
-                    <td style={S.td}>{m.template?.responsible_role || '-'}</td>
                     <td style={S.td}>
                       {editable ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -1500,16 +1499,15 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
         <h4 style={S.sectionTitle}>评审资料（已上传 {mats.filter((m: any) => !!m.file_data).length}/{mats.length}）</h4>
         <table style={S.table}>
           <thead><tr>
-            <th style={S.th}>材料名称</th><th style={S.th}>责任角色</th>
+            <th style={S.th}>材料名称</th>
             <th style={S.th}>附件</th>
           </tr></thead>
           <tbody>
-            {mats.length === 0 ? <tr><td colSpan={3} style={{ ...S.td, textAlign: 'center', color: '#999' }}>无</td></tr> :
+            {mats.length === 0 ? <tr><td colSpan={2} style={{ ...S.td, textAlign: 'center', color: '#999' }}>无</td></tr> :
               mats.map((m: any, i: number) => {
                 return (
                   <tr key={i}>
                     <td style={S.td}>{m.template?.required ? <span style={{ color: '#ff4d4f', marginRight: 4 }}>*</span> : ''}{m.template?.material_name || m.template_id}</td>
-                    <td style={S.td}>{m.template?.responsible_role || '-'}</td>
                     <td style={S.td}>{m.file_name ? (
                       <span style={{ fontSize: 11, color: '#1677ff' }}>
                         <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => previewMaterial(m.template_id, m.file_name)}>{m.file_name}</span>
