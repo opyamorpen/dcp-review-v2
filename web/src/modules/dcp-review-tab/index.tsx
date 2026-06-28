@@ -715,15 +715,34 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
             const rule = resolutionRule
             if (!rule) return null
             const approvalConclusions = rule.passRule?.approvalConclusions || ['pass', 'conditional_pass']
-            const excludeRoles = rule.passRule?.excludeRoles || []
             const passMode = rule.passRule?.mode || 'min_approval_count'
             const minCount = rule.passRule?.minCount || 3
             const submitMode = rule.submitRequirement?.mode || 'must_vote_roles'
 
             if (passMode === 'min_approval_count') {
-              const candidates = reviewers.filter((r: any) => !excludeRoles.includes(r.role_name))
+              // 按 voteScope 计票
+              const vsMode = rule.passRule?.voteScope?.mode || 'must_vote_roles'
+              const excludeRoles = rule.passRule?.voteScope?.excludeRoles || []
+              const selectedRoles = rule.passRule?.voteScope?.selectedRoles || []
+              let scopeNames: string[]
+              if (vsMode === 'all_reviewers') {
+                scopeNames = (configRoles).map((r: any) => r.role_name)
+              } else if (vsMode === 'selected_roles') {
+                scopeNames = (configRoles).filter((r: any) => selectedRoles.includes(r.role_name)).map((r: any) => r.role_name)
+              } else {
+                scopeNames = (configRoles).filter((r: any) => r.must_vote).map((r: any) => r.role_name)
+              }
+              scopeNames = scopeNames.filter((n: string) => !excludeRoles.includes(n))
+              const candidates = reviewers.filter((r: any) => scopeNames.includes(r.role_name))
               const acceptCount = candidates.filter((r: any) => approvalConclusions.includes(r.conclusion)).length
               const totalCandidates = candidates.length
+              if (totalCandidates < minCount) {
+                return (
+                  <div style={{ marginBottom: 8, padding: '6px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#ff4d4f' }}>
+                    可计票评审人仅 ${totalCandidates} 人，规则要求至少 ${minCount} 人通过，请补充评审人或调整规则
+                  </div>
+                )
+              }
               const canPass = acceptCount >= minCount
               return (
                 <div style={{ marginBottom: 8, padding: '6px 12px', borderRadius: 4, fontSize: 13, background: canPass ? '#f6ffed' : '#fff7e6', color: canPass ? '#52c41a' : '#faad14' }}>

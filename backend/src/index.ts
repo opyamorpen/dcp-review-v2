@@ -344,12 +344,13 @@ const DEFAULT_IPD_FLOW_LAYOUT = {
 const DEFAULT_RESOLUTION_RULES: any = {
   dcp: {
     publisher: { mode: 'role', roles: ['Chair'] },
-    submitRequirement: { mode: 'must_vote_roles' },
+    submitRequirement: { mode: 'vote_scope_roles' },
     passRule: {
       mode: 'min_approval_count',
-      excludeRoles: ['Chair'],
       minCount: 3,
       approvalConclusions: ['pass', 'conditional_pass'],
+      voteScope: { mode: 'must_vote_roles', selectedRoles: [], excludeRoles: ['Chair'] },
+      rejectOnAnyVeto: true,
     },
     allowedConclusions: ['pass', 'conditional_pass', 'reject'],
   },
@@ -360,6 +361,7 @@ const DEFAULT_RESOLUTION_RULES: any = {
       mode: 'all_required_submitted',
       approvalConclusions: ['pass', 'conditional_pass'],
       rejectConclusions: ['fail', 'rework', 'reject'],
+      voteScope: { mode: 'must_vote_roles', selectedRoles: [], excludeRoles: [] },
       rejectOnAnyVeto: true,
     },
     allowedConclusions: ['pass', 'conditional_pass', 'fail', 'rework'],
@@ -393,13 +395,37 @@ async function getResolutionRuleConfig(): Promise<any> {
     const row = await baseCfg.get('resolution_rule_config')
     if (row && (row as any).value) {
       const saved = JSON.parse((row as any).value)
+      const migrated = migrateRuleConfig(saved)
       return {
-        dcp: deepMergeRule(DEFAULT_RESOLUTION_RULES.dcp, saved.dcp),
-        tr: deepMergeRule(DEFAULT_RESOLUTION_RULES.tr, saved.tr),
+        dcp: deepMergeRule(DEFAULT_RESOLUTION_RULES.dcp, migrated.dcp),
+        tr: deepMergeRule(DEFAULT_RESOLUTION_RULES.tr, migrated.tr),
       }
     }
   } catch { /* 使用默认值 */ }
   return JSON.parse(JSON.stringify(DEFAULT_RESOLUTION_RULES))
+}
+
+// 迁移旧配置：passRule.excludeRoles → passRule.voteScope.excludeRoles
+function migrateRuleConfig(saved: any): any {
+  if (!saved || typeof saved !== 'object') return saved
+  const result = JSON.parse(JSON.stringify(saved))
+  for (const rt of ['dcp', 'tr']) {
+    const rule = result[rt]
+    if (!rule || !rule.passRule) continue
+    const pr = rule.passRule
+    // 如果有旧的 excludeRoles 但没有 voteScope，迁移
+    if (pr.excludeRoles && !pr.voteScope) {
+      pr.voteScope = { mode: 'must_vote_roles', selectedRoles: [], excludeRoles: pr.excludeRoles }
+      delete pr.excludeRoles
+    }
+    // 如果 voteScope 存在但缺字段，补齐
+    if (pr.voteScope) {
+      pr.voteScope.mode = pr.voteScope.mode || 'must_vote_roles'
+      pr.voteScope.selectedRoles = pr.voteScope.selectedRoles || []
+      pr.voteScope.excludeRoles = pr.voteScope.excludeRoles || []
+    }
+  }
+  return result
 }
 
 async function getResolutionRuleByType(reviewType: string): Promise<any> {
@@ -413,13 +439,29 @@ function filterRolesByType(roleTemplates: any[], reviewType: string): any[] {
   return roleTemplates.filter((rt: any) => (rt.review_type || 'dcp') === reviewType)
 }
 
-// 校验通过规则
+// 解析计票范围内的角色名称列表
+function resolveVoteScopeRoleNames(rule: any, roleTemplates: any[]): string[] {
+  const scope = rule.passRule?.voteScope || {}
+  const mode = scope.mode || 'must_vote_roles'
+  const excludeRoles = scope.excludeRoles || []
+  const selectedRoles = scope.selectedRoles || []
+  let roles: any[]
+  if (mode === 'all_reviewers') {
+    roles = roleTemplates
+  } else if (mode === 'selected_roles') {
+    roles = roleTemplates.filter((rt: any) => selectedRoles.includes(rt.role_name))
+  } else {
+    roles = roleTemplates.filter((rt: any) => rt.must_vote)
+  }
+  return roles.map((rt: any) => rt.role_name).filter((n: string) => !excludeRoles.includes(n))
+}
+
+// 校验通过规则（发布决议时调用）
 function validatePassRule(
   passRule: any, allRvrs: any[], roleTemplates: any[], fc: string,
 ): { ok: boolean; error?: string } {
   const mode = passRule.mode || 'min_approval_count'
   const approvalConclusions = passRule.approvalConclusions || ['pass', 'conditional_pass']
-  const excludeRoles = passRule.excludeRoles || []
 
   // 一票否决检查（仅对 pass 结论生效）
   if (passRule.rejectOnAnyVeto && fc === 'pass') {
@@ -437,9 +479,14 @@ function validatePassRule(
   if (fc !== 'pass') return { ok: true }
 
   if (mode === 'min_approval_count') {
-    const candidates = allRvrs.filter((r: any) => !excludeRoles.includes(r.role_name))
+    const scopeNames = resolveVoteScopeRoleNames({ passRule }, roleTemplates)
+    const candidates = allRvrs.filter((r: any) => scopeNames.includes(r.role_name))
     const approvals = candidates.filter((r: any) => approvalConclusions.includes(r.conclusion))
     const minCount = passRule.minCount || 3
+    // 区分规则不可达 vs 投票未达标
+    if (candidates.length < minCount) {
+      return { ok: false, error: `当前评审单可计票评审人只有 ${candidates.length} 人，但规则要求至少 ${minCount} 人通过，请补充评审人或调整规则。` }
+    }
     if (approvals.length < minCount) {
       return { ok: false, error: `决议为「通过」需至少 ${minCount} 位评审人投通过/有条件通过，当前仅 ${approvals.length} 位` }
     }
@@ -455,6 +502,46 @@ function validatePassRule(
   }
   // all_required_submitted 模式：只要求已提交，不校验通过数
   return { ok: true }
+}
+
+// 决议规则可达性校验（保存配置/发起评审时调用）
+function validateResolutionRuleReachability(rule: any, roleTemplates: any[], reviewType: string): string {
+  const rtLabel = reviewType.toUpperCase()
+  // 校验 1：发布角色不能为空
+  if (!rule.publisher?.roles?.length) {
+    return `${rtLabel} 决议发布角色未配置，请至少选择一个允许发布决议的角色。`
+  }
+  // 校验 2：可选决议结果不能为空
+  if (!rule.allowedConclusions?.length) {
+    return `${rtLabel} 可选最终决议结果不能为空，请至少选择一个结果。`
+  }
+  // 校验 3：允许"通过"时必须有有效通过规则
+  if (rule.allowedConclusions.includes('pass') && !rule.passRule?.mode) {
+    return `${rtLabel} 允许最终决议为"通过"，请配置对应的通过规则。`
+  }
+  // 校验 4/5：min_approval_count 的 minCount 不能大于可计票角色数
+  if (rule.allowedConclusions.includes('pass') && rule.passRule?.mode === 'min_approval_count') {
+    const scopeNames = resolveVoteScopeRoleNames(rule, roleTemplates)
+    const minCount = Number(rule.passRule.minCount || 0)
+    if (scopeNames.length === 0) {
+      return `${rtLabel} 计票范围内没有可计票角色，请调整计票范围或角色配置。`
+    }
+    if (minCount > scopeNames.length) {
+      return `${rtLabel} 计票范围内最多只有 ${scopeNames.length} 个角色可计票，最少通过人数不能设置为 ${minCount}。`
+    }
+  }
+  // 校验 6：提交要求必须覆盖计票范围
+  const submitMode = rule.submitRequirement?.mode || 'must_vote_roles'
+  const voteScopeMode = rule.passRule?.voteScope?.mode || 'must_vote_roles'
+  if (rule.passRule?.mode === 'min_approval_count') {
+    if (submitMode === 'must_vote_roles' && voteScopeMode === 'all_reviewers') {
+      return `${rtLabel} 通过规则依赖全部评审人投票，但发布前只要求必投角色提交。请改为"全部评审人提交"或"计票范围内角色全部提交"。`
+    }
+    if (submitMode === 'publisher_only') {
+      return `${rtLabel} 通过规则要求至少 N 人通过，但发布前只要求发布人存在。请改为其他提交要求。`
+    }
+  }
+  return '' // 校验通过
 }
 
 // ============================================================
@@ -526,10 +613,21 @@ export async function savePluginConfig(req: any): Promise<PluginResponse> {
     if (b.ipd_flow_layout) await baseCfg.set('ipd_flow_layout',
       { key: 'ipd_flow_layout', value: typeof b.ipd_flow_layout === 'string' ? b.ipd_flow_layout : JSON.stringify(b.ipd_flow_layout) })
     if (b.resolution_rule_config) {
-      const val = typeof b.resolution_rule_config === 'string'
-        ? b.resolution_rule_config
-        : JSON.stringify(b.resolution_rule_config)
-      await baseCfg.set('resolution_rule_config', { key: 'resolution_rule_config', value: val })
+      const rawRule = typeof b.resolution_rule_config === 'string'
+        ? JSON.parse(b.resolution_rule_config)
+        : b.resolution_rule_config
+      // 保存前做可达性校验
+      const allRoles = await qAll(roleTpl)
+      for (const rt of ['dcp', 'tr']) {
+        const rule = rawRule[rt]
+        if (!rule) continue
+        const typeRoles = filterRolesByType(allRoles, rt)
+        const err = validateResolutionRuleReachability(rule, typeRoles, rt)
+        if (err) {
+          return { body: { error: err }, statusCode: 400 }
+        }
+      }
+      await baseCfg.set('resolution_rule_config', { key: 'resolution_rule_config', value: JSON.stringify(rawRule) })
     }
     Logger.info(`[DCP] Config saved by ${operator_uuid || 'unknown'}`)
     return { body: { ok: true } }
@@ -1036,6 +1134,17 @@ export async function startReview(req: any): Promise<PluginResponse> {
   }
   if (missingRoles.length > 0) {
     return { body: { error: `以下角色尚未指定评审人：${missingRoles.join('、')}` }, statusCode: 400 }
+  }
+
+  // 校验 1.5：决议规则可达性校验——按实际评审人检查 minCount 是否可达
+  const _rule = await getResolutionRuleByType(reviewType)
+  if (_rule.passRule?.mode === 'min_approval_count' && _rule.allowedConclusions?.includes('pass')) {
+    const scopeNames = resolveVoteScopeRoleNames(_rule, roleTemplates)
+    const actualCandidates = reviewers.filter((r: any) => scopeNames.includes(r.role_name))
+    const minCount = Number(_rule.passRule.minCount || 0)
+    if (actualCandidates.length < minCount) {
+      return { body: { error: `当前评审单可计票评审人只有 ${actualCandidates.length} 人，但决议规则要求至少 ${minCount} 人通过。请补充评审人或调整决议规则。` }, statusCode: 400 }
+    }
   }
 
   // 校验 2：必填交付物必须已上传文件
@@ -1788,6 +1897,19 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     }
   } else if (submitMode === 'all_reviewers') {
     const unsubmitted = allRvrs.filter((r: any) => r.submitted_at === 0 || !r.submitted_at)
+    if (unsubmitted.length > 0) {
+      return { body: {
+        error: `仍有 ${unsubmitted.length} 名评审人未提交意见`,
+        unsubmitted: unsubmitted.map((r: any) => `${r.role_name}`),
+      }, statusCode: 400 }
+    }
+  } else if (submitMode === 'vote_scope_roles') {
+    // 计票范围内角色全部提交
+    const scopeNames = resolveVoteScopeRoleNames(rule, roleTemplates)
+    const unsubmitted = allRvrs.filter((r: any) => {
+      if (!scopeNames.includes(r.role_name)) return false
+      return r.submitted_at === 0 || !r.submitted_at
+    })
     if (unsubmitted.length > 0) {
       return { body: {
         error: `仍有 ${unsubmitted.length} 名评审人未提交意见`,

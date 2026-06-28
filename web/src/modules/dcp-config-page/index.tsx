@@ -689,43 +689,86 @@ const ResolutionRuleConfig: React.FC<{ rules: any; roles: any[]; onChange: (v: a
  <div style={{ marginBottom: 20, padding: 12, background: '#fafafa', borderRadius: 4 }}>
  <div style={{ fontWeight: 600, marginBottom: 8 }}>发布前提交要求</div>
  <select style={S.select} value={rule.submitRequirement?.mode || 'must_vote_roles'} disabled={!editing}
- onChange={e => update('submitRequirement.mode', e.target.value)}>
- <option value="must_vote_roles">必投角色全部提交</option>
- <option value="all_reviewers">全部评审人提交</option>
- <option value="publisher_only">仅要求发布人存在（不校验其他人）</option>
+   onChange={e => update('submitRequirement.mode', e.target.value)}>
+   <option value="must_vote_roles">必投角色全部提交</option>
+   <option value="all_reviewers">全部评审人提交</option>
+   <option value="vote_scope_roles">计票范围内角色全部提交</option>
+   <option value="publisher_only">仅要求发布人存在（不校验其他人）</option>
  </select>
  </div>
 
  {/* 3. 通过规则 */}
  <div style={{ marginBottom: 20, padding: 12, background: '#fafafa', borderRadius: 4 }}>
- <div style={{ fontWeight: 600, marginBottom: 8 }}>通过规则（最终决议为「通过」时的校验）</div>
- <select style={S.select} value={rule.passRule?.mode || 'min_approval_count'} disabled={!editing}
- onChange={e => update('passRule.mode', e.target.value)}>
- <option value="min_approval_count">至少 N 人通过/有条件通过</option>
- <option value="all_required_approved">必投角色全部通过/有条件通过</option>
- <option value="all_required_submitted">仅校验已提交（不强制通过数）</option>
- </select>
- {(rule.passRule?.mode || 'min_approval_count') === 'min_approval_count' && (
- <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
- <label style={{ fontSize: 12 }}>最少通过人数：</label>
- <input style={{ ...S.input, width: 80 }} type="number" min="1" value={rule.passRule?.minCount || 3} disabled={!editing}
- onChange={e => update('passRule.minCount', parseInt(e.target.value) || 3)} />
- <label style={{ fontSize: 12, marginLeft: 12 }}>排除角色（不计入投票范围）：</label>
- <span>
- {typeRoles.map((r: any) => (
- <span key={r.role_name} style={chipStyle((rule.passRule?.excludeRoles || []).includes(r.role_name))}
- onClick={() => editing && toggleArrayItem('passRule.excludeRoles', r.role_name)}>{r.role_name}</span>
- ))}
- </span>
- </div>
- )}
- <div style={{ marginTop: 8 }}>
- <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: editing ? 'pointer' : 'default' }}>
- <input type="checkbox" checked={!!rule.passRule?.rejectOnAnyVeto} disabled={!editing}
- onChange={e => update('passRule.rejectOnAnyVeto', e.target.checked)} />
- 启用否决权角色一票否决（否决权角色投反对票时，不可决议为「通过」）
- </label>
- </div>
+   <div style={{ fontWeight: 600, marginBottom: 8 }}>通过规则（最终决议为「通过」时的校验）</div>
+   <select style={S.select} value={rule.passRule?.mode || 'min_approval_count'} disabled={!editing}
+     onChange={e => update('passRule.mode', e.target.value)}>
+     <option value="min_approval_count">至少 N 人通过/有条件通过</option>
+     <option value="all_required_approved">必投角色全部通过/有条件通过</option>
+     <option value="all_required_submitted">仅校验已提交（不强制通过数）</option>
+   </select>
+   {(rule.passRule?.mode || 'min_approval_count') === 'min_approval_count' && (
+     <>
+       <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+         <label style={{ fontSize: 12 }}>最少通过人数：</label>
+         <input style={{ ...S.input, width: 80 }} type="number" min="1" value={rule.passRule?.minCount || 3} disabled={!editing}
+           onChange={e => update('passRule.minCount', parseInt(e.target.value) || 3)} />
+       </div>
+       {/* 计票范围 */}
+       <div style={{ marginTop: 8 }}>
+         <label style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>计票范围：</label>
+         <select style={S.select} value={rule.passRule?.voteScope?.mode || 'must_vote_roles'} disabled={!editing}
+           onChange={e => update('passRule.voteScope.mode', e.target.value)}>
+           <option value="must_vote_roles">仅必投角色</option>
+           <option value="all_reviewers">所有评审人</option>
+           <option value="selected_roles">指定角色</option>
+         </select>
+       </div>
+       {/* 指定角色多选 */}
+       {(rule.passRule?.voteScope?.mode || 'must_vote_roles') === 'selected_roles' && (
+         <div style={{ marginTop: 8 }}>
+           <label style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>指定计票角色：</label>
+           <span>
+             {typeRoles.map((r: any) => (
+               <span key={r.role_name} style={chipStyle((rule.passRule?.voteScope?.selectedRoles || []).includes(r.role_name))}
+                 onClick={() => editing && toggleArrayItem('passRule.voteScope.selectedRoles', r.role_name)}>{r.role_name}</span>
+             ))}
+           </span>
+         </div>
+       )}
+       {/* 从计票范围中排除角色 */}
+       <div style={{ marginTop: 8 }}>
+         <label style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>从计票范围中排除以下角色：</label>
+         <span>
+           {typeRoles.map((r: any) => (
+             <span key={r.role_name} style={chipStyle((rule.passRule?.voteScope?.excludeRoles || []).includes(r.role_name))}
+               onClick={() => editing && toggleArrayItem('passRule.voteScope.excludeRoles', r.role_name)}>{r.role_name}</span>
+           ))}
+         </span>
+       </div>
+       {/* 实时可达性提示 */}
+       {(() => {
+         const mode = rule.passRule?.voteScope?.mode || 'must_vote_roles'
+         const exclude = rule.passRule?.voteScope?.excludeRoles || []
+         const selected = rule.passRule?.voteScope?.selectedRoles || []
+         let scopeCount = 0
+         if (mode === 'all_reviewers') scopeCount = typeRoles.length
+         else if (mode === 'selected_roles') scopeCount = typeRoles.filter((r: any) => selected.includes(r.role_name)).length
+         else scopeCount = typeRoles.filter((r: any) => r.must_vote).length
+         scopeCount -= typeRoles.filter((r: any) => exclude.includes(r.role_name) && (mode === 'all_reviewers' || (mode === 'must_vote_roles' && r.must_vote) || (mode === 'selected_roles' && selected.includes(r.role_name)))).length
+         const minCount = rule.passRule?.minCount || 3
+         if (scopeCount <= 0) return <div style={{ marginTop: 6, fontSize: 12, color: '#ff4d4f' }}>⚠ 当前计票范围内没有可计票角色</div>
+         if (minCount > scopeCount) return <div style={{ marginTop: 6, fontSize: 12, color: '#ff4d4f' }}>⚠ 当前计票范围内最多 {scopeCount} 个角色可计票，不能要求至少 {minCount} 人通过</div>
+         return <div style={{ marginTop: 6, fontSize: 12, color: '#52c41a' }}>✓ 当前计票范围 {scopeCount} 个角色可计票，要求 ≥{minCount} 人通过</div>
+       })()}
+     </>
+   )}
+   <div style={{ marginTop: 8 }}>
+     <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: editing ? 'pointer' : 'default' }}>
+       <input type="checkbox" checked={!!rule.passRule?.rejectOnAnyVeto} disabled={!editing}
+         onChange={e => update('passRule.rejectOnAnyVeto', e.target.checked)} />
+       启用否决权角色一票否决（否决权角色投反对票时，不可决议为「通过」）
+     </label>
+   </div>
  </div>
 
  {/* 4. 可选决议结果 */}

@@ -1063,20 +1063,35 @@ const ReviewerWorkspace: React.FC<{
    })()}
  </div>
  {(() => {
- const excludeRoles = resolutionRule?.passRule?.excludeRoles || []
+ const vsMode = resolutionRule?.passRule?.voteScope?.mode || 'must_vote_roles'
+ const excludeRoles = resolutionRule?.passRule?.voteScope?.excludeRoles || []
+ const selectedRoles = resolutionRule?.passRule?.voteScope?.selectedRoles || []
  const minCount = resolutionRule?.passRule?.minCount || 3
  const passMode = resolutionRule?.passRule?.mode || 'min_approval_count'
+ const approvalConclusions = resolutionRule?.passRule?.approvalConclusions || ['pass', 'conditional_pass']
  if (passMode === 'min_approval_count') {
- const candidates = reviewers.filter((r: any) => !excludeRoles.includes(r.role_name))
- const acceptCount = candidates.filter((r: any) => r.conclusion === 'pass' || r.conclusion === 'conditional_pass').length
- const canPass = acceptCount >= minCount
- return (
- <div style={{ marginBottom: 8, padding: '6px 12px', borderRadius: 4, fontSize: 13, background: canPass ? '#f6ffed' : '#fff7e6', color: canPass ? '#52c41a' : '#faad14' }}>
- {canPass
- ? `同意票 ${acceptCount}/${candidates.length}，满足大多数（≥${minCount}），可决议为「通过」`
- : `同意票仅 ${acceptCount}/${candidates.length}，不满足大多数（需≥${minCount}）`}
- </div>
- )
+   let scopeNames: string[]
+   if (vsMode === 'all_reviewers') scopeNames = configRoles.map((r: any) => r.role_name)
+   else if (vsMode === 'selected_roles') scopeNames = configRoles.filter((r: any) => selectedRoles.includes(r.role_name)).map((r: any) => r.role_name)
+   else scopeNames = configRoles.filter((r: any) => r.must_vote).map((r: any) => r.role_name)
+   scopeNames = scopeNames.filter((n: string) => !excludeRoles.includes(n))
+   const candidates = reviewers.filter((r: any) => scopeNames.includes(r.role_name))
+   const acceptCount = candidates.filter((r: any) => approvalConclusions.includes(r.conclusion)).length
+   if (candidates.length < minCount) {
+     return (
+     <div style={{ marginBottom: 8, padding: '6px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#ff4d4f' }}>
+       可计票评审人仅 {candidates.length} 人，规则要求至少 {minCount} 人通过，请补充评审人或调整规则
+     </div>
+     )
+   }
+   const canPass = acceptCount >= minCount
+   return (
+   <div style={{ marginBottom: 8, padding: '6px 12px', borderRadius: 4, fontSize: 13, background: canPass ? '#f6ffed' : '#fff7e6', color: canPass ? '#52c41a' : '#faad14' }}>
+   {canPass
+   ? `同意票 ${acceptCount}/${candidates.length}，满足大多数（≥${minCount}），可决议为「通过」`
+   : `同意票仅 ${acceptCount}/${candidates.length}，不满足大多数（需≥${minCount}）`}
+   </div>
+   )
  }
  const submitMode = resolutionRule?.submitRequirement?.mode || 'must_vote_roles'
  if (submitMode === 'publisher_only') return null
