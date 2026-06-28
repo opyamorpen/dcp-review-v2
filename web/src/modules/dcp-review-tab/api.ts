@@ -101,6 +101,7 @@ export const getReviewDetail = (uuid: string) => callApi(`/dcp/review/${uuid}`)
 export const listReviewsByProject = (puuid: string, reviewType?: string) => callApi(`/dcp/reviews/by-project/${puuid}${reviewType ? `?review_type=${reviewType}` : ''}`)
 export const listTeamReviews = () => callApi('/dcp/reviews/team')
 export const startReview = (uuid: string, data?: any) => callApi(`/dcp/review/${uuid}/start`, { method: 'POST', body: JSON.stringify(data || {}) })
+export const recallReview = (uuid: string, data?: any) => callApi(`/dcp/review/${uuid}/recall`, { method: 'POST', body: JSON.stringify(data || {}) })
 export const deleteReview = (uuid: string, data?: any) => callApi(`/dcp/review/${uuid}`, { method: 'DELETE', body: JSON.stringify(data || {}) })
 export const recreateReview = (uuid: string, data?: any) => callApi(`/dcp/review/${uuid}/recreate`, { method: 'POST', body: JSON.stringify(data || {}) })
 

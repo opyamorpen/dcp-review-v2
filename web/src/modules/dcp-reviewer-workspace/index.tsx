@@ -348,10 +348,7 @@ const App: React.FC = () => {
  </td>
  {myTab === 'resolution' && (
  <td style={{ ...S.td, textAlign: 'center' }}>
-   {r.resolution_pending
-     ? <button style={{ ...S.btn(true), fontSize: 12, padding: '2px 10px' }} onClick={(e) => { e.stopPropagation(); openReview(r) }}>去发布决议</button>
-     : <span style={{ fontSize: 11, color: '#999' }}>等待评审人提交</span>
-   }
+ <button style={{ ...S.btn(true), fontSize: 12, padding: '2px 10px' }} onClick={(e) => { e.stopPropagation(); openReview(r) }}>去发布决议</button>
  </td>
  )}
  {myTab === 'done' && (

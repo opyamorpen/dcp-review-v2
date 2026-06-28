@@ -610,6 +610,10 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   const [currentUser, setCurrentUser] = useState<{ uuid: string; name: string }>({ uuid: '', name: '' })
   const [resolutionRule, setResolutionRule] = useState<any>(null)
   const [configRoles, setConfigRoles] = useState<any[]>([])
+  const [recallConfig, setRecallConfig] = useState<any>({ enabled: false, requireReason: true })
+  const [showRecallForm, setShowRecallForm] = useState(false)
+  const [recallReason, setRecallReason] = useState('')
+  const [recalling, setRecalling] = useState(false)
 
   useEffect(() => {
     fetch('/project/api/project/users/me', { credentials: 'include' })
@@ -625,6 +629,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       const rules = c.resolution_rule_config || {}
       setResolutionRule(rules[rvReviewType] || null)
       setConfigRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === rvReviewType))
+      if (c.review_recall_config) setRecallConfig(c.review_recall_config)
     }).catch(() => {})
   }, [rvReviewType])
 
@@ -633,6 +638,29 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     r.reviewer_uuid === currentUser.uuid &&
     (resolutionRule.publisher?.role || '') === r.role_name
   )
+
+  // 判断当前用户是否可以撤回评审
+  const canRecall = recallConfig.enabled && isReviewing && !data.resolution && currentUser.uuid === rv.creator_uuid
+
+  async function handleRecall() {
+    if (recallConfig.requireReason && !recallReason.trim()) {
+      setMsg('请填写撤回原因')
+      return
+    }
+    setRecalling(true)
+    try {
+      const res = await api.recallReview(rv.review_uuid, { operator_uuid: currentUser.uuid, reason: recallReason }) as any
+      if (res?.error) { setMsg(res.error); return }
+      setMsg('评审已撤回，回到草稿状态')
+      setShowRecallForm(false)
+      setRecallReason('')
+      onRefresh()
+    } catch (e: any) {
+      setMsg(e?.message || '撤回失败')
+    } finally {
+      setRecalling(false)
+    }
+  }
 
   async function handleDeleteReview() {
     if (!currentUser.uuid) return
@@ -690,6 +718,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
               <button style={{ ...S.btn(false), color: '#ff4d4f', borderColor: '#ff4d4f' }} onClick={handleDeleteReview}>删除</button>
             )}
             {isReviewing && !data.resolution && canPublish && <button style={S.btn(true)} onClick={() => { setShowPublishForm(!showPublishForm); setMsg('') }}>{showPublishForm ? '× 取消发布' : '生成决议'}</button>}
+            {canRecall && !showRecallForm && <button style={{ ...S.btn(false), color: '#faad14', borderColor: '#faad14' }} onClick={() => { setShowRecallForm(true); setMsg('') }}>撤回评审</button>}
             {rv.status === 'rejected' && currentUser.uuid && rv.creator_uuid === currentUser.uuid && (
               <button style={{ ...S.btn(true), background: '#722ed1', borderColor: '#722ed1' }} onClick={handleRecreate}>重新发起</button>
             )}
@@ -700,6 +729,25 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
           {rv.meeting_time > 0 && <span style={{ marginLeft: 12 }}>会议: {new Date(rv.meeting_time).toLocaleString('zh-CN')}</span>}
         </div>
       </div>
+      {/* 撤回评审表单 */}
+      {showRecallForm && (
+        <div style={{ ...S.card, marginBottom: 16, background: '#fff7e6', borderLeft: '4px solid #faad14' }}>
+          <h4 style={S.sectionTitle}>撤回评审</h4>
+          <div style={{ fontSize: 13, color: '#666', marginBottom: 12 }}>
+            撤回后评审单将回到草稿状态，已提交的评审意见和 Checklist 将被清空，评审人待办和决议待办将失效。
+          </div>
+          {recallConfig.requireReason && (
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>撤回原因 *</label>
+              <textarea style={{ ...S.input, width: '100%', minHeight: 60, resize: 'vertical' }} value={recallReason} onChange={e => setRecallReason(e.target.value)} placeholder="请填写撤回原因…" />
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button style={{ ...S.btn(false), color: '#faad14', borderColor: '#faad14' }} onClick={handleRecall} disabled={recalling}>{recalling ? '撤回中…' : '确认撤回'}</button>
+            <button style={S.btn(false)} onClick={() => { setShowRecallForm(false); setRecallReason(''); setMsg('') }}>取消</button>
+          </div>
+        </div>
+      )}
       {/* 发布决议表单（内置，替代 prompt 弹窗） */}
       {showPublishForm && (
         <div style={{ ...S.card, marginBottom: 16, background: '#fff7e6', borderLeft: '4px solid #faad14' }}>
@@ -1106,6 +1154,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
     const [nameMap, setNameMap] = useState<Record<string, string>>({})
     const [reviewerDirty, setReviewerDirty] = useState(false)
     const [savingReviewers, setSavingReviewers] = useState(false)
+    const [publisherRole, setPublisherRole] = useState('')
     const reviewType = (data.review?.review_type || 'dcp')
 
     useEffect(() => {
@@ -1116,7 +1165,11 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
     }, [data.reviewers])
 
     useEffect(() => {
-      api.getPluginConfig().then(c => setRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === reviewType))).catch(() => {})
+      api.getPluginConfig().then(c => {
+        setRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === reviewType))
+        const rules = c.resolution_rule_config || {}
+        setPublisherRole(rules[reviewType]?.publisher?.role || '')
+      }).catch(() => {})
     }, [reviewType])
 
     // 草稿态：角色列表加载后自动回填已有评审人
@@ -1182,31 +1235,43 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
             /* 草稿态：直接可编辑 */
             <div>
               {roles.length === 0 ? <div style={{ color: '#999', padding: 20, textAlign: 'center' }}>正在加载角色配置…</div> : (
-                <table style={S.table}>
-                  <thead><tr>
-                    <th style={S.th}>角色</th><th style={{ ...S.th, width: 100 }}>角色属性</th><th style={S.th}>评审人</th>
-                  </tr></thead>
-                  <tbody>
-                    {roles.map((role: any) => {
-                      const isRequired = role.must_vote || role.has_veto
-                      return (
-                        <tr key={role.role_name}>
-                          <td style={{ ...S.td, fontWeight: 500 }}>
-                            {isRequired && <span style={{ color: '#ff4d4f', marginRight: 2 }}>*</span>}
-                            {role.role_name}
-                          </td>
-                          <td style={{ ...S.td, fontSize: 11, color: '#999' }}>
-                            {role.must_vote ? '必投' : ''}{role.must_vote && role.has_veto ? ' / ' : ''}{role.has_veto ? '否决' : ''}
-                            {!role.must_vote && !role.has_veto ? '-' : ''}
-                          </td>
-                          <td style={S.td}>
-                            <UserPicker value={selected[role.role_name] || ''} displayName={nameMap[selected[role.role_name] || '']} onChange={u => { setSelected({ ...selected, [role.role_name]: u.uuid }); setReviewerDirty(true) }} placeholder={isRequired ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'} />
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
+                <div>
+                  {!publisherRole && <div style={{ marginBottom: 8, padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#fff1f0', color: '#ff4d4f' }}>
+                    ⚠ 当前{reviewType.toUpperCase()}未配置决议角色，请先在「决议规则」中选择一个决议角色。
+                  </div>}
+                  {publisherRole && <div style={{ marginBottom: 8, padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#e6f4ff', color: '#1677ff' }}>
+                    💡 决议人不参与前置评审；当前置评审满足提交要求后，系统会为决议人生成"待我决议"。
+                  </div>}
+                  <table style={S.table}>
+                    <thead><tr>
+                      <th style={S.th}>角色</th><th style={{ ...S.th, width: 160 }}>角色属性</th><th style={S.th}>评审人</th>
+                    </tr></thead>
+                    <tbody>
+                      {roles.map((role: any) => {
+                        const isRequired = role.must_vote || role.has_veto
+                        const isPublisher = publisherRole === role.role_name
+                        return (
+                          <tr key={role.role_name}>
+                            <td style={{ ...S.td, fontWeight: 500 }}>
+                              {(isRequired || isPublisher) && <span style={{ color: '#ff4d4f', marginRight: 2 }}>*</span>}
+                              {role.role_name}
+                            </td>
+                            <td style={{ ...S.td, fontSize: 11 }}>
+                              {isPublisher && <span style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 3, background: '#e6f4ff', color: '#1677ff', fontWeight: 600, marginRight: 4 }}>决议人</span>}
+                              {role.must_vote && <span style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 3, background: '#fff7e6', color: '#faad14', marginRight: 4 }}>必投</span>}
+                              {role.has_veto && <span style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 3, background: '#fff1f0', color: '#ff4d4f', marginRight: 4 }}>否决</span>}
+                              {!isPublisher && !role.must_vote && !role.has_veto && <span style={{ color: '#999' }}>-</span>}
+                            </td>
+                            <td style={S.td}>
+                              <UserPicker value={selected[role.role_name] || ''} displayName={nameMap[selected[role.role_name] || '']} onChange={u => { setSelected({ ...selected, [role.role_name]: u.uuid }); setReviewerDirty(true) }} placeholder={isRequired || isPublisher ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'} />
+                              {isPublisher && !selected[role.role_name] && <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>决议角色必须指定 1 名人员</div>}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               )}
               <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
                 <button style={S.btn(true)} onClick={saveReviewers} disabled={savingReviewers || roles.length === 0}>

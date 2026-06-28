@@ -99,6 +99,20 @@ async function getNotifyConfig(): Promise<any> {
   }
 }
 
+// 评审撤回配置
+async function getReviewRecallConfig(): Promise<any> {
+  try {
+    const cfg = await baseCfg.get('review_recall_config')
+    if (cfg && (cfg as any).value) return JSON.parse((cfg as any).value)
+  } catch { /* ignore */ }
+  return {
+    enabled: false,
+    allowedBeforeResolution: true,
+    requireReason: true,
+    clearSubmittedOpinions: true,
+  }
+}
+
 async function sendNotification(
   title: string, body: string, url: string, toUsers: string[], channels?: Record<string, boolean>
 ) {
@@ -568,21 +582,24 @@ function validateResolutionRuleReachability(rule: any, roleTemplates: any[], rev
 }
 
 // 判断评审单是否满足决议前置条件（按 submitRequirement.mode 判断）
+// 排除决议角色——决议人不参与前置评审提交
 function isResolutionReady(rule: any, reviewers: any[], roleTemplates: any[]): boolean {
+  const publisherRole = getPublisherRole(rule)
+  const frontReviewers = publisherRole ? reviewers.filter((r: any) => r.role_name !== publisherRole) : reviewers
   const submitMode = rule?.submitRequirement?.mode || 'must_vote_roles'
   if (submitMode === 'publisher_only') return true
   if (submitMode === 'all_reviewers') {
-    return reviewers.length > 0 && reviewers.every((r: any) => r.submitted_at > 0)
+    return frontReviewers.length > 0 && frontReviewers.every((r: any) => r.submitted_at > 0)
   }
   if (submitMode === 'vote_scope_roles') {
     const scopeNames = resolveVoteScopeRoleNames(rule, roleTemplates)
-    const scopeReviewers = reviewers.filter((r: any) => scopeNames.includes(r.role_name))
+    const scopeReviewers = frontReviewers.filter((r: any) => scopeNames.includes(r.role_name))
     if (scopeReviewers.length === 0) return false
     return scopeReviewers.every((r: any) => r.submitted_at > 0)
   }
   // must_vote_roles
   const mustVoteNames = roleTemplates.filter((rt: any) => rt.must_vote || rt.has_veto).map((rt: any) => rt.role_name)
-  const mustReviewers = reviewers.filter((r: any) => mustVoteNames.includes(r.role_name))
+  const mustReviewers = frontReviewers.filter((r: any) => mustVoteNames.includes(r.role_name))
   if (mustReviewers.length === 0) return false
   return mustReviewers.every((r: any) => r.submitted_at > 0)
 }
@@ -610,6 +627,7 @@ export async function getPluginConfig(_req: any): Promise<PluginResponse> {
     config,
     ipd_flow_layout: ipdFlowLayout,
     notify_config: await getNotifyConfig(),
+    review_recall_config: await getReviewRecallConfig(),
     resolution_rule_config: await getResolutionRuleConfig(),
     phases: withType(await qAll(phaseTpl)),
     materials: withType(await qAll(matTpl)),
@@ -653,6 +671,8 @@ export async function savePluginConfig(req: any): Promise<PluginResponse> {
     if (b.checklistItems) await replace(checkItem, b.checklistItems, 'chk')
     if (b.notify_config) await baseCfg.set('notify_config',
       { key: 'notify_config', value: typeof b.notify_config === 'string' ? b.notify_config : JSON.stringify(b.notify_config) })
+    if (b.review_recall_config) await baseCfg.set('review_recall_config',
+      { key: 'review_recall_config', value: typeof b.review_recall_config === 'string' ? b.review_recall_config : JSON.stringify(b.review_recall_config) })
     if (b.ipd_flow_layout) await baseCfg.set('ipd_flow_layout',
       { key: 'ipd_flow_layout', value: typeof b.ipd_flow_layout === 'string' ? b.ipd_flow_layout : JSON.stringify(b.ipd_flow_layout) })
     if (b.resolution_rule_config) {
@@ -1132,9 +1152,9 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
   }
   results.sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
   // 拆分三类：待我评审 / 待我决议 / 已完成
-  // 决议人在前置评审完成前也进入"待我决议"，但 resolution_pending=false 表示尚未可发布
+  // 决议人不进入"待我评审"；"待我决议"只在前置评审满足提交要求后出现
   const review_pending = results.filter(r => r.status === 'reviewing' && !r.my_submitted && !r.is_publisher)
-  const resolution_pending = results.filter(r => r.status === 'reviewing' && r.is_publisher && !r.my_submitted)
+  const resolution_pending = results.filter(r => r.resolution_pending)
   const done = results.filter(r => r.my_submitted || r.status === 'completed' || r.status === 'rejected')
   return { body: { reviews: results, review_pending, resolution_pending, done, pending: review_pending } }
 }
@@ -1279,6 +1299,87 @@ export async function startReview(req: any): Promise<PluginResponse> {
   }
 
   return { body: { ok: true, status: 'reviewing' } }
+}
+
+// ============================================================
+// 撤回评审（reviewing → draft）
+// ============================================================
+export async function recallReview(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  const b = (req.body || {}) as any
+  const { operator_uuid, reason } = b
+
+  if (!rid || !operator_uuid) {
+    return { body: { error: '缺少必要字段' }, statusCode: 400 }
+  }
+
+  const rv = await review.get(rid)
+  if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
+
+  const cfg = await getReviewRecallConfig()
+  if (!cfg.enabled) {
+    return { body: { error: '管理员未开启评审撤回功能' }, statusCode: 403 }
+  }
+
+  if (rv.status !== 'reviewing') {
+    return { body: { error: '仅评审中的评审单可以撤回' }, statusCode: 400 }
+  }
+
+  if (rv.creator_uuid !== operator_uuid) {
+    return { body: { error: '仅评审发起人可以撤回评审' }, statusCode: 403 }
+  }
+
+  const hasResolution = (await qAll(resolution, (v: any) => v.review_uuid === rid)).length > 0
+  if (hasResolution) {
+    return { body: { error: '评审已发布决议，不可撤回' }, statusCode: 400 }
+  }
+
+  if (cfg.requireReason && !String(reason || '').trim()) {
+    return { body: { error: '请填写撤回原因' }, statusCode: 400 }
+  }
+
+  const now = Date.now()
+
+  // 重置评审人提交状态
+  const allReviewers = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+  const resetReviewers: any[] = []
+  for (const r of allReviewers) {
+    const reset = {
+      ...r,
+      conclusion: '',
+      risk_level: 'medium',
+      opinion_summary: '',
+      submitted_at: 0,
+    }
+    await rvReviewer.set(r._key, reset)
+    resetReviewers.push(reset)
+  }
+
+  // 重置 checklist
+  let checklistJson = (rv as any).checklist_json || '[]'
+  try {
+    const cl = jsonArr(checklistJson)
+    for (const item of cl) {
+      item.status = 'unchecked'
+      item.checked_by = ''
+      item.checked_at = 0
+    }
+    checklistJson = JSON.stringify(cl)
+  } catch { /* ignore */ }
+
+  // 回到 draft 状态，清空决议通知状态
+  await review.set(rid, {
+    ...rv,
+    status: 'draft',
+    checklist_json: checklistJson,
+    reviewers_json: JSON.stringify(resetReviewers),
+    updated_at: now,
+  })
+
+  await writeAudit(rid, operator_uuid, '撤回评审', rid,
+    `评审已撤回，回到草稿状态。原因：${reason || '未填写'}`)
+
+  return { body: { ok: true, status: 'draft' } }
 }
 
 // ============================================================

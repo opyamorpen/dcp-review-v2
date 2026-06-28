@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import ReactDOM from 'react-dom'
 import { apiGet, apiPost, DcpApiError } from '../../api'
 
-type NavKey = 'phases' | 'materials' | 'indicators' | 'roles' | 'checklist' | 'resolution' | 'notify' | 'ipdflow'
+type NavKey = 'phases' | 'materials' | 'indicators' | 'roles' | 'checklist' | 'resolution' | 'notify' | 'ipdflow' | 'recall'
 
 const NAV: { key: NavKey; label: string }[] = [
  { key: 'phases', label: '节点模板' },
@@ -13,6 +13,7 @@ const NAV: { key: NavKey; label: string }[] = [
  { key: 'resolution', label: '决议规则' },
  { key: 'ipdflow', label: 'IPD流程图' },
  { key: 'notify', label: '通知设置' },
+ { key: 'recall', label: '撤回设置' },
 ]
 
 function jsonArr(s: string): string[] {
@@ -59,6 +60,7 @@ const App: React.FC = () => {
  const [notifyConfig, setNotifyConfig] = useState<any>({ enabled: true, on_review_start: true, on_all_submitted: true, on_resolution: true, channels: { email: true, wechat: false, dingtalk: false, feishu: false, youdao: false } })
  const [ipdFlowLayout, setIpdFlowLayout] = useState<any>(null)
  const [resolutionRules, setResolutionRules] = useState<any>({ dcp: null, tr: null })
+ const [recallConfig, setRecallConfig] = useState<any>({ enabled: false, allowedBeforeResolution: true, requireReason: true, clearSubmittedOpinions: true })
 
  useEffect(() => { loadConfig() }, [])
 
@@ -83,6 +85,7 @@ const App: React.FC = () => {
  if (data.roles?.length) setRoles(data.roles.map((r: any) => ({ ...r, review_type: r.review_type || 'dcp' })))
  if (data.checklistItems?.length) setChecklistItems(data.checklistItems.map((c: any) => ({ ...c, review_type: c.review_type || 'dcp' })))
  if (data.notify_config) setNotifyConfig(data.notify_config)
+ if (data.review_recall_config) setRecallConfig(data.review_recall_config)
  if (data.ipd_flow_layout) setIpdFlowLayout(data.ipd_flow_layout)
  if (data.resolution_rule_config) setResolutionRules(data.resolution_rule_config)
  } catch (err: any) { setMessage('加载失败: ' + err.message) }
@@ -100,6 +103,7 @@ const App: React.FC = () => {
  materials: normType(materials), indicators: normType(indicators), roles: normType(roles),
  checklistItems: normType(checklistItems),
  notify_config: notifyConfig,
+ review_recall_config: recallConfig,
  ipd_flow_layout: ipdFlowLayout,
  resolution_rule_config: resolutionRules,
  }
@@ -144,6 +148,7 @@ const App: React.FC = () => {
  {nav === 'resolution' && <ResolutionRuleConfig rules={resolutionRules} roles={roles} onChange={setResolutionRules} editing={editing} reviewType={reviewType} />}
  {nav === 'ipdflow' && <IpdFlowLayoutConfig layout={ipdFlowLayout} phases={phases} onChange={setIpdFlowLayout} editing={editing} />}
  {nav === 'notify' && <NotifySettings config={notifyConfig} onChange={setNotifyConfig} editing={editing} />}
+ {nav === 'recall' && <RecallSettings config={recallConfig} onChange={setRecallConfig} editing={editing} />}
  </div>
  {editing && (
  <div style={S.saveBar}>
@@ -555,6 +560,48 @@ const NotifySettings: React.FC<{ config: any; onChange: (c: any) => void; editin
  </label>
  ))}
  </div>
+ </div>
+ )
+}
+
+// ============================================================
+// 评审撤回设置
+// ============================================================
+const RecallSettings: React.FC<{ config: any; onChange: (c: any) => void; editing: boolean }> = ({ config, onChange, editing }) => {
+ const c = config || {}
+ function toggle(key: string) {
+   if (!editing) return
+   onChange({ ...c, [key]: !c[key] })
+ }
+ return (
+ <div>
+   <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>评审撤回设置 {editing ? '— 编辑中' : '— 只读'}</div>
+   {!editing && <div style={{ marginBottom: 16, color: '#999', fontSize: 12 }}>点击右上角「配置」进入编辑模式后可修改</div>}
+
+   <div style={{ marginBottom: 20, padding: 12, background: '#f9f9f9', borderRadius: 8 }}>
+     <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: editing ? 'pointer' : 'default', fontWeight: 600, fontSize: 14 }}>
+       <input type="checkbox" checked={!!c.enabled} onChange={() => toggle('enabled')} disabled={!editing} />
+       允许发起人撤回已发起评审
+     </label>
+     <div style={{ marginTop: 4, color: '#999', fontSize: 12, marginLeft: 26 }}>
+       开启后，评审发起人可以在评审中且未发布决议时撤回评审，撤回后回到草稿状态
+     </div>
+   </div>
+
+   <div style={{ marginBottom: 20 }}>
+     <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', cursor: editing ? 'pointer' : 'default' }}>
+       <input type="checkbox" checked={!!c.requireReason} onChange={() => toggle('requireReason')} disabled={!editing} />
+       撤回时必须填写原因
+     </label>
+     <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', cursor: editing ? 'pointer' : 'default' }}>
+       <input type="checkbox" checked={!!c.clearSubmittedOpinions} onChange={() => toggle('clearSubmittedOpinions')} disabled={!editing} />
+       撤回时清空已提交评审意见和 Checklist
+     </label>
+   </div>
+
+   <div style={{ padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#fff7e6', color: '#faad14' }}>
+     ⚠ 撤回后评审单回到草稿状态，已提交的评审意见、Checklist 状态将被清空，评审人待办和决议待办将失效。
+   </div>
  </div>
  )
 }
