@@ -77,6 +77,7 @@ const MATERIAL_STATUS: Record<string, { text: string; color: string; bg: string 
 const S: Record<string, any> = {
  container: { padding: 20, fontFamily: 'sans-serif', fontSize: 14, color: '#333', maxWidth: 900, margin: '0 auto' },
  card: { padding: 16, background: '#fff', borderRadius: 8, border: '1px solid #e8e8e8', marginBottom: 16 },
+ tableWrap: { width: '100%', overflowX: 'auto' as any, overflowY: 'visible' as any },
  sectionTitle: { fontSize: 15, fontWeight: 600, margin: '0 0 12px 0' } as React.CSSProperties,
  table: { width: '100%', borderCollapse: 'collapse' as any, fontSize: 13 },
  th: { padding: '8px 12px', textAlign: 'left' as any, background: '#fafafa', borderBottom: '1px solid #e8e8e8' },
@@ -324,6 +325,8 @@ const App: React.FC = () => {
  {filteredReviews.length === 0 ? (
  <div style={{ ...S.card, textAlign: 'center', padding: 32, color: '#999', fontSize: 13 }}>无匹配结果</div>
  ) : (
+ <div style={S.card}>
+ <div style={S.tableWrap}>
  <table style={S.table}>
  <thead><tr>
  <th style={S.th}>编号</th><th style={{ ...S.th, width: 70, textAlign: 'center' }}>类型</th><th style={S.th}>阶段</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 120 }}>项目</th>
@@ -365,6 +368,8 @@ const App: React.FC = () => {
  ))}
  </tbody>
  </table>
+ </div>
+ </div>
  )}
  </React.Fragment>
  )
@@ -1085,6 +1090,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  {votes.length > 0 && (
  <div>
  <label style={S.label}>评审意见汇总（投票快照）</label>
+ <div style={S.tableWrap}>
  <table style={S.table}>
  <thead><tr>
  <th style={S.th}>角色</th><th style={S.th}>投票</th><th style={S.th}>风险</th><th style={S.th}>意见</th>
@@ -1104,6 +1110,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  ))}
  </tbody>
  </table>
+ </div>
  </div>
  )}
  <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
@@ -1204,6 +1211,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  {/* 评审意见预览 */}
  <div style={{ marginTop: 12 }}>
  <label style={S.label}>评审意见汇总</label>
+ <div style={S.tableWrap}>
  <table style={S.table}>
  <thead><tr>
  <th style={S.th}>角色</th><th style={S.th}>投票</th><th style={S.th}>风险</th><th style={S.th}>意见</th>
@@ -1223,6 +1231,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  ))}
  </tbody>
  </table>
+ </div>
  </div>
 
  {/* Checklist 详情（可展开） */}

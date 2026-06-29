@@ -87,6 +87,8 @@ const S: Record<string, any> = {
   select: { padding: '4px 8px', borderRadius: 4, border: '1px solid #d9d9d9', fontSize: 13 },
   textarea: { padding: '4px 8px', borderRadius: 4, border: '1px solid #d9d9d9', fontSize: 13, width: '100%', resize: 'vertical' as any, boxSizing: 'border-box' as any },
   card: { padding: 14, background: '#fff', borderRadius: 8, border: '1px solid #e8e8e8', marginBottom: 12 },
+  tabPanel: { background: '#fff', border: '1px solid #e8e8e8', borderRadius: 8, padding: 16, marginBottom: 12, boxSizing: 'border-box' as any },
+  tableWrap: { width: '100%', overflowX: 'auto' as any, overflowY: 'visible' as any },
   formGroup: { marginBottom: 10 },
   label: { display: 'block', marginBottom: 4, fontWeight: 500, fontSize: 13 },
 }
@@ -337,7 +339,7 @@ const App: React.FC = () => {
             <div style={{ fontSize: 12 }}>请调整筛选条件</div>
           </div>
         ) : (
-        <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #f0f0f0', overflow: 'hidden' }}>
+        <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #f0f0f0', overflowX: 'auto', overflowY: 'visible' }}>
         <table style={{ ...S.table, marginBottom: 0 }}>
           <thead><tr>
             <th style={S.th}>编号</th><th style={S.th}>阶段</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 70, textAlign: 'center' }}>状态</th>
@@ -923,6 +925,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
           {/* 评审意见预览 */}
           <div style={{ marginTop: 12 }}>
             <label style={S.label}>评审意见汇总</label>
+            <div style={S.tableWrap}>
             <table style={S.table}>
               <thead><tr>
                 <th style={S.th}>角色</th><th style={S.th}>投票</th><th style={S.th}>风险</th><th style={S.th}>意见</th>
@@ -942,6 +945,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
 
           {/* Checklist 详情（可展开） */}
@@ -964,11 +968,11 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
         ))}
       </div>
       {/* 内容区 */}
-      {activeTab === 'materials' && <MaterialsPanel data={data} editable={isEditable} onRefresh={onRefresh} currentUser={currentUser} />}
-      {activeTab === 'reviewers' && <ReviewersPanel data={data} editable={isEditable} isReviewing={isReviewing} onRefresh={onRefresh} currentUser={currentUser} />}
-      {activeTab === 'issues' && <LinkedIssuesPanel data={data} projectUuid={projectUuid} projectKey={projectKey} componentUuid={componentUuid} viewUuid={viewUuid} onRefresh={onRefresh} />}
+      {activeTab === 'materials' && <div style={S.tabPanel}><MaterialsPanel data={data} editable={isEditable} onRefresh={onRefresh} currentUser={currentUser} /></div>}
+      {activeTab === 'reviewers' && <div style={S.tabPanel}><ReviewersPanel data={data} editable={isEditable} isReviewing={isReviewing} onRefresh={onRefresh} currentUser={currentUser} /></div>}
+      {activeTab === 'issues' && <div style={S.tabPanel}><LinkedIssuesPanel data={data} projectUuid={projectUuid} projectKey={projectKey} componentUuid={componentUuid} viewUuid={viewUuid} onRefresh={onRefresh} /></div>}
       {activeTab === 'checklist' && (
-        <div>
+        <div style={S.tabPanel}>
           {(data.checklist || []).length === 0 ? (
             <div style={{ color: '#999', padding: 40, textAlign: 'center' }}>本评审单暂无 Checklist 配置。</div>
           ) : (
@@ -979,8 +983,8 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
           )}
         </div>
       )}
-      {activeTab === 'resolution' && <ResolutionPanel data={data} onRefresh={onRefresh} />}
-      {activeTab === 'audit' && <AuditPanel reviewUuid={rv.review_uuid} />}
+      {activeTab === 'resolution' && <div style={S.tabPanel}><ResolutionPanel data={data} onRefresh={onRefresh} /></div>}
+      {activeTab === 'audit' && <div style={S.tabPanel}><AuditPanel reviewUuid={rv.review_uuid} /></div>}
       {copyToast && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.75)', color: '#fff', padding: '8px 20px', borderRadius: 6, fontSize: 13, zIndex: 9999 }}>{copyToast}</div>
       )}
@@ -1085,6 +1089,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
       {/* 交付物 */}
       <div style={{ marginBottom: 20 }}>
         <h4 style={S.sectionTitle}>交付物清单（已上传 {mats.filter((m: any) => !!m.file_data).length}/{mats.length}）</h4>
+        <div style={S.tableWrap}>
         <table style={S.table}>
           <thead><tr>
             <th style={S.th}>材料名称</th>
@@ -1141,6 +1146,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
               })}
           </tbody>
         </table>
+        </div>
       </div>
       {/* 指标卡 */}
       <div>
@@ -1148,6 +1154,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
           <h4 style={S.sectionTitle}>关键指标（{inds.length}项）</h4>
           {editable && !editInd && <button style={S.btn(false)} onClick={startEditInd}>编辑</button>}
         </div>
+        <div style={S.tableWrap}>
         <table style={S.table}>
           <thead><tr>
             <th style={S.th}>指标</th><th style={S.th}>单位</th><th style={{ ...S.th, width: 60, textAlign: 'center' }}>黄</th><th style={{ ...S.th, width: 60, textAlign: 'center' }}>红</th>
@@ -1178,6 +1185,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
               })}
           </tbody>
         </table>
+        </div>
         {editInd && (
           <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
             <button style={S.btn(true)} onClick={saveInd}>保存</button>
@@ -1311,6 +1319,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                   {publisherRole && <div style={{ marginBottom: 8, padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#e6f4ff', color: '#1677ff' }}>
                     💡 决议人不参与前置评审；当前置评审满足提交要求后，系统会为决议人生成"待我决议"。
                   </div>}
+                  <div style={S.tableWrap}>
                   <table style={S.table}>
                     <thead><tr>
                       <th style={S.th}>角色</th><th style={{ ...S.th, width: 160 }}>角色属性</th><th style={S.th}>评审人</th>
@@ -1340,6 +1349,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                       })}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
               <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -1353,6 +1363,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
             /* 非草稿态：只读 */
             <>
               {reviewers.length === 0 ? <div style={{ color: '#999', padding: 20, textAlign: 'center' }}>尚未添加评审人。</div> :
+                <div style={S.tableWrap}>
                 <table style={S.table}>
                   <thead><tr>
                     <th style={S.th}>角色</th><th style={S.th}>评审人</th><th style={{ ...S.th, width: 100, textAlign: 'center' }}>结论</th>
@@ -1376,7 +1387,8 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                       </tr>
                     ))}
                   </tbody>
-                </table>}
+                </table>
+                </div>}
             </>
           )}
         </div>
@@ -1424,6 +1436,7 @@ const LinkedIssuesPanel: React.FC<{ data: any; projectUuid: string; projectKey: 
         </div>
       )}
       {issues.length === 0 ? <div style={{ color: '#999', padding: 20, textAlign: 'center' }}>暂无关联工作项</div> :
+        <div style={S.tableWrap}>
         <table style={S.table}>
           <thead><tr>
             <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>类型</th>
@@ -1446,7 +1459,8 @@ const LinkedIssuesPanel: React.FC<{ data: any; projectUuid: string; projectKey: 
               </tr>
             ))}
           </tbody>
-        </table>}
+        </table>
+        </div>}
     </div>
   )
 }
@@ -1607,7 +1621,7 @@ const AuditPanel: React.FC<{ reviewUuid: string }> = ({ reviewUuid }) => {
     <div>
       <h4 style={S.sectionTitle}>审计日志（{logs.length}条）</h4>
       {logs.length === 0 ? <div style={{ color: '#999', padding: 20, textAlign: 'center' }}>暂无审计记录</div> :
-        <div style={{ background: '#fff', borderRadius: 8, border: '1px solid #f0f0f0', overflow: 'hidden' }}>
+        <div style={S.tableWrap}>
         <table style={{ ...S.table, marginBottom: 0 }}>
           <thead><tr>
             <th style={{ ...S.th, width: 140 }}>时间</th><th style={{ ...S.th, width: 100 }}>操作者</th>
@@ -1704,6 +1718,7 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
       {/* 评审资料 — 只读 */}
       <div style={{ ...S.card, marginBottom: 16 }}>
         <h4 style={S.sectionTitle}>评审资料（已上传 {mats.filter((m: any) => !!m.file_data).length}/{mats.length}）</h4>
+        <div style={S.tableWrap}>
         <table style={S.table}>
           <thead><tr>
             <th style={S.th}>材料名称</th>
@@ -1726,12 +1741,14 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
               })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* 关键指标 — 只读 */}
       <div style={{ ...S.card, marginBottom: 16 }}>
         <h4 style={S.sectionTitle}>关键指标（{inds.length}项）</h4>
 
+        <div style={S.tableWrap}>
         <table style={S.table}>
           <thead><tr>
 
@@ -1758,6 +1775,7 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
               })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* 我的评审意见 */}
@@ -1802,6 +1820,7 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
       <div style={S.card}>
         <h4 style={S.sectionTitle}>关联工作项（{issues.length}个）</h4>
         {issues.length === 0 ? <div style={{ color: '#999', padding: 12, textAlign: 'center', fontSize: 13 }}>暂无关联工作项</div> :
+          <div style={S.tableWrap}>
           <table style={S.table}>
             <thead><tr>
               <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>类型</th><th style={{ ...S.th, width: 80 }}>状态</th><th style={{ ...S.th, width: 80 }}>创建者</th>
@@ -1821,7 +1840,8 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
                 </tr>
               ))}
             </tbody>
-          </table>}
+          </table>
+          </div>}
         <div style={{ marginTop: 16, borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
           <h4 style={{ ...S.sectionTitle, fontSize: 13 }}>+ 新建工作项</h4>
           <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
