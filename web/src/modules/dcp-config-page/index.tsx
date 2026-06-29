@@ -124,7 +124,8 @@ const App: React.FC = () => {
  ))}
  </div>
  <div style={S.content}>
- {/* DCP / TR 类型切换 */}
+ {/* DCP / TR 类型切换（IPD流程图为全局配置，不区分 DCP/TR） */}
+ {nav !== 'ipdflow' && (
  <div style={{ display: 'flex', gap: 0, marginBottom: 16, borderBottom: '1px solid #e8e8e8' }}>
  {(['dcp', 'tr'] as const).map(t => (
  <button key={t} onClick={() => setReviewType(t)}
@@ -135,6 +136,7 @@ const App: React.FC = () => {
  </button>
  ))}
  </div>
+ )}
  {!editing && (
  <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
  <button style={S.btn(true)} onClick={() => { setEditing(true); setMessage('') }}>配置</button>
