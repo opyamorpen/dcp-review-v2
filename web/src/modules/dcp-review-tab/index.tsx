@@ -2035,6 +2035,34 @@ const IPDFlowChart: React.FC<{
     return stageXs[idx] + stageWidths[idx] * (m.position ?? 0.5)
   }
 
+  // 圆角多边形 path：保留原顶点坐标，仅在每个角处用 1px 二次贝塞尔做圆角
+  function pointOnSeg(from: { x: number; y: number }, to: { x: number; y: number }, dist: number): { x: number; y: number } {
+    const dx = to.x - from.x, dy = to.y - from.y
+    const len = Math.sqrt(dx * dx + dy * dy)
+    if (!len) return { x: to.x, y: to.y }
+    const r = Math.min(dist, len / 2) / len
+    return { x: from.x + dx * r, y: from.y + dy * r }
+  }
+  function roundedPoly(pts: { x: number; y: number }[], radius = 1): string {
+    if (pts.length < 3) return ''
+    const segs: string[] = []
+    pts.forEach((corner, i) => {
+      const prev = pts[(i - 1 + pts.length) % pts.length]
+      const next = pts[(i + 1) % pts.length]
+      const before = pointOnSeg(corner, prev, radius)
+      const after = pointOnSeg(corner, next, radius)
+      if (i === 0) segs.push(`M ${after.x} ${after.y}`)
+      else { segs.push(`L ${before.x} ${before.y}`); segs.push(`Q ${corner.x} ${corner.y} ${after.x} ${after.y}`) }
+    })
+    const first = pts[0], last = pts[pts.length - 1]
+    const bf = pointOnSeg(first, last, radius)
+    const af = pointOnSeg(first, pts[1], radius)
+    segs.push(`L ${bf.x} ${bf.y}`)
+    segs.push(`Q ${first.x} ${first.y} ${af.x} ${af.y}`)
+    segs.push('Z')
+    return segs.join(' ')
+  }
+
   // 主阶段形状：taper=左宽右窄收窄段，rect=矩形段
   function stagePath(idx: number): string {
     const x = stageXs[idx]
@@ -2048,7 +2076,12 @@ const IPDFlowChart: React.FC<{
     const lb = bandCenterY + leftH / 2
     const rt = bandCenterY - rightH / 2
     const rb = bandCenterY + rightH / 2
-    return `M ${x} ${lt} L ${x + w} ${rt} L ${x + w} ${rb} L ${x} ${lb} Z`
+    return roundedPoly([
+      { x, y: lt },
+      { x: x + w, y: rt },
+      { x: x + w, y: rb },
+      { x, y: lb },
+    ], 1)
   }
 
   // 阶段带上下边界（取最宽处）
