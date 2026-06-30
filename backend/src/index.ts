@@ -115,14 +115,16 @@ async function getReviewRecallConfig(): Promise<any> {
 
 async function sendNotification(
   title: string, body: string, url: string, toUsers: string[], channels?: Record<string, boolean>
-) {
+): Promise<{ attempted: string[]; succeeded: string[]; failed: { channel: string; error: string }[] }> {
   const cfg = await getNotifyConfig()
-  if (!cfg.enabled) return
+  const result = { attempted: [] as string[], succeeded: [] as string[], failed: [] as { channel: string; error: string }[] }
+  if (!cfg.enabled) return result
   const ch = channels || cfg.channels
   for (const [key, enabled] of Object.entries(ch)) {
     if (!enabled) continue
     const way = NOTIFY_WAY_MAP[key]
     if (!way) continue
+    result.attempted.push(key)
     try {
       await Notify({
         Title: title,
@@ -130,11 +132,14 @@ async function sendNotification(
         NotifyWay: way,
         MessageBody: [{ Body: body, Url: url }],
       })
+      result.succeeded.push(key)
       Logger.info(`[DCP] Notification sent: ${key} to ${toUsers.length} users`)
     } catch (e: any) {
+      result.failed.push({ channel: key, error: e.message || String(e) })
       Logger.error(`[DCP] Notification failed (${key}):`, e.message)
     }
   }
+  return result
 }
 
 // external API 兼容：路径参数可能在 req.params 或需从 URL 中提取
@@ -2372,6 +2377,149 @@ export async function getAuditLog(req: any): Promise<PluginResponse> {
   const logs = await qAll(auditLog, (v: any) => v.review_uuid === rid)
   logs.sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0))
   return { body: { logs } }
+}
+
+// ============================================================
+// 手动催办（催办评审人 / 催办决议人）
+// ============================================================
+export async function remindReview(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  const b = (req.body || {}) as any
+  const { target, operator_uuid, operator_name } = b
+
+  if (!rid || !target || !operator_uuid) {
+    return { body: { error: '缺少必要字段' }, statusCode: 400 }
+  }
+  if (target !== 'reviewers' && target !== 'resolution') {
+    return { body: { error: 'target 必须为 reviewers 或 resolution' }, statusCode: 400 }
+  }
+
+  const rv = await review.get(rid)
+  if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
+
+  // 权限校验：仅评审发起人可催办
+  if (rv.creator_uuid !== operator_uuid) {
+    return { body: { error: '仅评审发起人可催办' }, statusCode: 403 }
+  }
+
+  // 状态校验：仅评审中可催办
+  if (rv.status !== 'reviewing') {
+    return { body: { error: '当前状态不可催办' }, statusCode: 400 }
+  }
+
+  // 通知配置校验
+  const notifyCfg = await getNotifyConfig()
+  if (!notifyCfg.enabled) {
+    return { body: { error: '通知功能未开启' }, statusCode: 400 }
+  }
+  // 兼容旧配置：如果没有 on_manual_remind 字段，视为开启
+  if (notifyCfg.on_manual_remind === false) {
+    return { body: { error: '手动催办功能未开启' }, statusCode: 400 }
+  }
+
+  // 冷却校验
+  const cooldown = Number(notifyCfg.remind_cooldown_seconds || 60) * 1000
+  const recent = await qAll(auditLog, (v: any) =>
+    v.review_uuid === rid &&
+    v.action === '手动催办' &&
+    v.target === target &&
+    Date.now() - Number(v.timestamp || 0) < cooldown
+  )
+  if (recent.length > 0) {
+    return { body: { error: '催办过于频繁，请稍后再试' }, statusCode: 429 }
+  }
+
+  // 读取评审人（优先快照）
+  const snapReviewers = jsonArr((rv as any).reviewers_json || '[]')
+  const reviewers = snapReviewers.length > 0 ? snapReviewers
+    : await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+  if (reviewers.length === 0) {
+    return { body: { error: '暂无需要催办的评审人' }, statusCode: 400 }
+  }
+
+  const reviewType = (rv as any).review_type || 'dcp'
+  const rule = await getResolutionRuleByType(reviewType)
+  const publisherRole = getPublisherRole(rule)
+  const phaseName = (rv as any).phase_code || ''
+  const reviewTitle = (rv as any).review_title || 'DCP评审'
+  const rtLabel = reviewType.toUpperCase()
+  const url = (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : ''
+
+  if (target === 'reviewers') {
+    // 催办评审人：排除决议角色，仅催办未提交的前置评审人
+    const pendingReviewers = reviewers.filter((r: any) => {
+      if (!r.reviewer_uuid) return false
+      if (publisherRole && r.role_name === publisherRole) return false
+      return Number(r.submitted_at || 0) <= 0
+    })
+    if (pendingReviewers.length === 0) {
+      return { body: { error: '暂无需要催办的评审人' }, statusCode: 400 }
+    }
+
+    const toUsers = pendingReviewers.map((r: any) => r.reviewer_uuid)
+    const sendResult = await sendNotification(
+      `${rtLabel}评审催办 — ${phaseName}`,
+      `您有待处理的「${phaseName} ${reviewTitle}」评审意见，请尽快前往评审工作台提交。`,
+      url,
+      toUsers,
+    )
+
+    // 审计日志（detail 上限 2048，截断接收人列表）
+    const recipientSummary = pendingReviewers.slice(0, 20).map((r: any) => ({ uuid: r.reviewer_uuid, role_name: r.role_name }))
+    const detail = JSON.stringify({
+      target, recipient_count: pendingReviewers.length,
+      recipients: recipientSummary, channels: sendResult.attempted,
+    }).slice(0, 2048)
+    await writeAudit(rid, operator_uuid, '手动催办', target, detail)
+
+    return { body: {
+      ok: true, target: 'reviewers',
+      recipient_count: pendingReviewers.length,
+      recipients: pendingReviewers.map((r: any) => ({ uuid: r.reviewer_uuid, role_name: r.role_name })),
+      channels: sendResult.attempted,
+    }}
+  }
+
+  // target === 'resolution'：催办决议人
+  const roleTemplates = filterRolesByType(await qAll(roleTpl), reviewType)
+  const ready = isResolutionReady(rule, reviewers, roleTemplates)
+  if (!ready) {
+    return { body: { error: '当前评审单尚未进入待决议状态' }, statusCode: 400 }
+  }
+
+  // 确认尚未发布决议
+  const existingRes = await qAll(resolution, (v: any) => v.review_uuid === rid)
+  const hasPublished = existingRes.some((r: any) => Number(r.published_at || 0) > 0)
+  if (hasPublished) {
+    return { body: { error: '当前评审单尚未进入待决议状态' }, statusCode: 400 }
+  }
+
+  // 找到唯一决议人
+  const publisher = reviewers.find((r: any) => r.role_name === publisherRole && r.reviewer_uuid)
+  if (!publisher) {
+    return { body: { error: '未找到决议人' }, statusCode: 400 }
+  }
+
+  const sendResult = await sendNotification(
+    `${rtLabel}决议催办 — ${phaseName}`,
+    `「${phaseName} ${reviewTitle}」已满足决议条件，请尽快前往评审单发布决议。`,
+    url,
+    [publisher.reviewer_uuid],
+  )
+
+  const detail = JSON.stringify({
+    target, recipient_count: 1,
+    recipients: [{ uuid: publisher.reviewer_uuid, role_name: publisher.role_name }],
+    channels: sendResult.attempted,
+  }).slice(0, 2048)
+  await writeAudit(rid, operator_uuid, '手动催办', target, detail)
+
+  return { body: {
+    ok: true, target: 'resolution',
+    recipient_count: 1,
+    recipients: [{ uuid: publisher.reviewer_uuid, role_name: publisher.role_name }],
+    channels: sendResult.attempted,
+  }}
 }
 
 // ============================================================

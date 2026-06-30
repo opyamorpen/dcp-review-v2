@@ -57,7 +57,7 @@ const App: React.FC = () => {
  const [indicators, setIndicators] = useState<any[]>([])
  const [roles, setRoles] = useState<any[]>([])
  const [checklistItems, setChecklistItems] = useState<any[]>([])
- const [notifyConfig, setNotifyConfig] = useState<any>({ enabled: true, on_review_start: true, on_all_submitted: true, on_resolution: true, channels: { email: true, wechat: false, dingtalk: false, feishu: false, youdao: false } })
+ const [notifyConfig, setNotifyConfig] = useState<any>({ enabled: true, on_review_start: true, on_all_submitted: true, on_resolution: true, on_manual_remind: true, remind_cooldown_seconds: 60, channels: { email: true, wechat: false, dingtalk: false, feishu: false, youdao: false } })
  const [ipdFlowLayout, setIpdFlowLayout] = useState<any>(null)
  const [resolutionRules, setResolutionRules] = useState<any>({ dcp: null, tr: null })
  const [recallConfig, setRecallConfig] = useState<any>({ enabled: false, allowedBeforeResolution: true, requireReason: true, clearSubmittedOpinions: true })
@@ -513,6 +513,11 @@ const NotifySettings: React.FC<{ config: any; onChange: (c: any) => void; editin
  const ch = c.channels || {}
  function toggle(key: string) {
  if (!editing) return
+ if (key === 'on_manual_remind') {
+   const cur = c.on_manual_remind !== false
+   onChange({ ...c, on_manual_remind: !cur })
+   return
+ }
  onChange({ ...c, [key]: !c[key] })
  }
  function toggleChannel(key: string) {
@@ -549,6 +554,24 @@ const NotifySettings: React.FC<{ config: any; onChange: (c: any) => void; editin
  <input type="checkbox" checked={!!c.on_resolution} onChange={() => toggle('on_resolution')} disabled={!editing} />
  决议发布后通知创建者及评审人
  </label>
+ <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', cursor: editing ? 'pointer' : 'default' }}>
+ <input type="checkbox" checked={c.on_manual_remind !== false} onChange={() => toggle('on_manual_remind')} disabled={!editing} />
+ 允许手动催办（评审发起人催办评审人/决议人）
+ </label>
+ </div>
+
+ {/* 催办冷却时间 */}
+ <div style={{ marginBottom: 20 }}>
+ <div style={{ fontWeight: 600, marginBottom: 8 }}>催办冷却时间</div>
+ <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+ <select style={S.select} value={String(c.remind_cooldown_seconds || 60)} disabled={!editing}
+ onChange={e => onChange({ ...c, remind_cooldown_seconds: parseInt(e.target.value) })}>
+ <option value="60">1 分钟</option>
+ <option value="300">5 分钟</option>
+ <option value="600">10 分钟</option>
+ </select>
+ <span style={{ color: '#999', fontSize: 12 }}>同一评审单同一类型催办的最短间隔</span>
+ </div>
  </div>
 
  {/* 通知渠道 */}

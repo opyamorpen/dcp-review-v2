@@ -637,6 +637,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   const [editingMeetingTime, setEditingMeetingTime] = useState(false)
   const [meetingTimeDraft, setMeetingTimeDraft] = useState('')
   const [savingMeetingTime, setSavingMeetingTime] = useState(false)
+  const [reminding, setReminding] = useState(false)
 
   useEffect(() => {
     fetch('/project/api/project/users/me', { credentials: 'include' })
@@ -664,6 +665,16 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
 
   // 判断当前用户是否可以撤回评审
   const canRecall = recallConfig.enabled && isReviewing && !data.resolution && currentUser.uuid === rv.creator_uuid
+
+  // 催办相关计算
+  const isCreator = currentUser.uuid && rv.creator_uuid === currentUser.uuid
+  const publisherRoleName = resolutionRule?.publisher?.role || ''
+  const pendingReviewers = (data.reviewers || []).filter((r: any) => {
+    if (publisherRoleName && r.role_name === publisherRoleName) return false
+    return Number(r.submitted_at || 0) <= 0
+  })
+  const canRemindReviewers = isReviewing && isCreator && pendingReviewers.length > 0
+  const canRemindResolution = isReviewing && isCreator && !data.resolution && pendingReviewers.length === 0 && !!publisherRoleName
 
   async function handleRecall() {
     if (recallConfig.requireReason && !recallReason.trim()) {
@@ -757,6 +768,25 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     finally { setPublishing(false) }
   }
 
+  async function handleRemind(target: 'reviewers' | 'resolution') {
+    setReminding(true)
+    setMsg('')
+    try {
+      const res = await api.remindReview(rv.review_uuid, { target, operator_uuid: currentUser.uuid, operator_name: currentUser.name }) as any
+      if (res?.error) { setMsg(res.error); return }
+      if (target === 'reviewers') {
+        setMsg(`已催办 ${res.recipient_count} 名评审人`)
+      } else {
+        setMsg('已催办决议人')
+      }
+      onRefresh()
+    } catch (e: any) {
+      setMsg(e?.message || '催办失败')
+    } finally {
+      setReminding(false)
+    }
+  }
+
   return (
     <div style={S.container}>
       <div style={{ marginBottom: 12 }}>
@@ -777,6 +807,8 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
               <button style={{ ...S.btn(false), color: '#ff4d4f', borderColor: '#ff4d4f' }} onClick={handleDeleteReview}>删除</button>
             )}
             {isReviewing && !data.resolution && canPublish && <button style={S.btn(true)} onClick={() => { setShowPublishForm(!showPublishForm); setMsg('') }}>{showPublishForm ? '× 取消发布' : '生成决议'}</button>}
+            {canRemindReviewers && <button style={{ ...S.btn(false), color: '#faad14', borderColor: '#faad14' }} onClick={() => handleRemind('reviewers')} disabled={reminding}>{reminding ? '催办中…' : `催办评审人(${pendingReviewers.length})`}</button>}
+            {canRemindResolution && <button style={{ ...S.btn(false), color: '#faad14', borderColor: '#faad14' }} onClick={() => handleRemind('resolution')} disabled={reminding}>{reminding ? '催办中…' : '催办决议人'}</button>}
             {canRecall && !showRecallForm && <button style={{ ...S.btn(false), color: '#faad14', borderColor: '#faad14' }} onClick={() => { setShowRecallForm(true); setMsg('') }}>撤回评审</button>}
             {rv.status === 'rejected' && currentUser.uuid && rv.creator_uuid === currentUser.uuid && (
               <button style={{ ...S.btn(true), background: '#722ed1', borderColor: '#722ed1' }} onClick={handleRecreate}>重新发起</button>

@@ -130,3 +130,7 @@ export const addSupplement = (uuid: string, data: any) => callApi(`/dcp/review/$
 
 // ---- 审计 ----
 export const getAuditLog = (uuid: string) => callApi(`/dcp/review/${uuid}/audit-log`)
+
+// ---- 催办 ----
+export const remindReview = (uuid: string, data: { target: 'reviewers' | 'resolution'; operator_uuid: string; operator_name?: string }) =>
+  callApi(`/dcp/review/${uuid}/remind`, { method: 'POST', body: JSON.stringify(data) })
