@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import ReactDOM from 'react-dom'
-import { apiGet, apiPost, DcpApiError } from '../../api'
+import { apiGet, apiPost, DcpApiError, getTeamUUID } from '../../api'
 
 type NavKey = 'phases' | 'materials' | 'indicators' | 'roles' | 'checklist' | 'resolution' | 'notify' | 'ipdflow' | 'recall' | 'remediation'
 
@@ -640,6 +640,41 @@ const RecallSettings: React.FC<{ config: any; onChange: (c: any) => void; editin
 // 整改设置
 // ============================================================
 const RemediationSettings: React.FC<{ issueType: string; onChange: (v: string) => void; editing: boolean }> = ({ issueType, onChange, editing }) => {
+ const [issueTypes, setIssueTypes] = useState<{ uuid: string; name: string }[]>([])
+ const [loading, setLoading] = useState(false)
+ const [open, setOpen] = useState(false)
+ const ref = React.useRef<HTMLDivElement>(null)
+
+ useEffect(() => {
+  const tu = getTeamUUID()
+  if (!tu) return
+  setLoading(true)
+  fetch(`/project/api/project/team/${tu}/items/graphql?t=issueTypes`, {
+    method: 'POST', credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: '{ issueTypes(orderBy: { namePinyin: ASC }) { uuid name } }', variables: {} }),
+  })
+    .then(r => r.json())
+    .then(gql => {
+      const raw = gql?.data?.issueTypes || []
+      setIssueTypes(raw.map((t: any) => ({ uuid: t.uuid || '', name: t.name || '' })).filter((t: any) => t.name))
+    })
+    .catch(() => {})
+    .finally(() => setLoading(false))
+ }, [])
+
+ useEffect(() => {
+  if (!open) return
+  function handleClick(e: MouseEvent) {
+    if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+  }
+  document.addEventListener('mousedown', handleClick)
+  return () => document.removeEventListener('mousedown', handleClick)
+ }, [open])
+
+ const kw = issueType.toLowerCase()
+ const filtered = kw ? issueTypes.filter(t => t.name.toLowerCase().includes(kw)) : issueTypes
+
  return (
  <div>
  <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>整改设置 {editing ? '— 编辑中' : '— 只读'}</div>
@@ -650,7 +685,37 @@ const RemediationSettings: React.FC<{ issueType: string; onChange: (v: string) =
  <div style={{ color: '#999', fontSize: 12, marginBottom: 8 }}>
    评审决议为「有条件通过」或「返工」后，在整改项区域创建整改工作项时，默认使用此类型。留空则不预填。
  </div>
- <input style={S.input} value={issueType} onChange={e => onChange(e.target.value)} placeholder="如：任务" disabled={!editing} />
+
+ {!editing ? (
+   <div style={{ ...S.input, background: '#f5f5f5', color: '#666', minHeight: 22 }}>{issueType || '（未设置）'}</div>
+ ) : (
+   <div ref={ref} style={{ position: 'relative' }}>
+     <input
+       style={S.input}
+       value={issueType}
+       onChange={e => { onChange(e.target.value); setOpen(true) }}
+       onFocus={() => setOpen(true)}
+       placeholder="输入关键字搜索或直接输入类型名称"
+     />
+     {open && (
+       <div style={{ position: 'absolute', top: 34, left: 0, right: 0, background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4, maxHeight: 220, overflow: 'auto', zIndex: 100, boxShadow: '0 2px 8px rgba(0,0,0,.15)' }}>
+         {loading && <div style={{ padding: 8, color: '#999', fontSize: 12 }}>加载中…</div>}
+         {!loading && filtered.length === 0 && <div style={{ padding: 8, color: '#999', fontSize: 12 }}>无匹配类型</div>}
+         {filtered.map(t => {
+           const sel = t.name === issueType
+           return (
+             <div key={t.uuid} onClick={() => { onChange(t.name); setOpen(false) }}
+               style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 13, background: sel ? '#e6f4ff' : 'transparent', color: sel ? '#1677ff' : '#333' }}
+               onMouseEnter={e => { if (!sel) e.currentTarget.style.background = '#f5f5f5' }}
+               onMouseLeave={e => { if (!sel) e.currentTarget.style.background = 'transparent' }}>
+               {t.name}
+             </div>
+           )
+         })}
+       </div>
+     )}
+   </div>
+ )}
  </div>
 
  <div style={{ padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#e6f4ff', color: '#1677ff' }}>
