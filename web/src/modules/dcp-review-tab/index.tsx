@@ -643,6 +643,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   const [recallReason, setRecallReason] = useState('')
   const [recalling, setRecalling] = useState(false)
   const [transitioning, setTransitioning] = useState(false)
+  const [showReReviewConfirm, setShowReReviewConfirm] = useState(false)
   const [editingMeetingTime, setEditingMeetingTime] = useState(false)
   const [meetingTimeDraft, setMeetingTimeDraft] = useState('')
   const [savingMeetingTime, setSavingMeetingTime] = useState(false)
@@ -762,7 +763,6 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
 
   async function handleStartReReview() {
     if (!currentUser.uuid) return
-    if (!confirm('确认开始复审？\n评审人提交状态将重置，评审人可重新提交评审意见。')) return
     setTransitioning(true)
     setMsg('')
     try {
@@ -771,6 +771,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
         operator_uuid: currentUser.uuid,
         reason: '发起复审',
       })
+      setShowReReviewConfirm(false)
       onRefresh()
     } catch (e: any) { setMsg(e.message || '操作失败') }
     finally { setTransitioning(false) }
@@ -838,10 +839,17 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
             {rv.status === 'rejected' && currentUser.uuid && rv.creator_uuid === currentUser.uuid && (
               <button style={{ ...S.btn(true), background: '#722ed1', borderColor: '#722ed1' }} onClick={handleRecreate}>重新发起</button>
             )}
-            {effState === 'remediation_pending' && currentUser.uuid && rv.creator_uuid === currentUser.uuid && (
-              <button style={{ ...S.btn(true), background: '#fa8c16', borderColor: '#fa8c16' }} onClick={handleStartReReview} disabled={transitioning}>{transitioning ? '处理中…' : '开始复审'}</button>
+            {effState === 'remediation_pending' && currentUser.uuid && rv.creator_uuid === currentUser.uuid && !showReReviewConfirm && (
+              <button style={{ ...S.btn(true), background: '#fa8c16', borderColor: '#fa8c16' }} onClick={() => { setShowReReviewConfirm(true); setMsg('') }}>开始复审</button>
             )}
-            {effState === 'remediation_pending' && <span style={{ marginLeft: 8, fontSize: 12, color: '#fa8c16' }}>整改中 — 完成整改后可发起复审</span>}
+            {effState === 'remediation_pending' && showReReviewConfirm && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: '#fff7e6', padding: '4px 12px', borderRadius: 6, border: '1px solid #faad14' }}>
+                <span style={{ fontSize: 12, color: '#fa8c16' }}>确认开始复审？评审人提交状态将重置</span>
+                <button style={{ padding: '2px 10px', borderRadius: 4, border: 'none', background: '#fa8c16', color: '#fff', cursor: 'pointer', fontSize: 12 }} onClick={handleStartReReview} disabled={transitioning}>{transitioning ? '处理中…' : '确认'}</button>
+                <button style={{ padding: '2px 10px', borderRadius: 4, border: '1px solid #d9d9d9', background: '#fff', color: '#666', cursor: 'pointer', fontSize: 12 }} onClick={() => { setShowReReviewConfirm(false); setMsg('') }}>取消</button>
+              </span>
+            )}
+            {effState === 'remediation_pending' && !showReReviewConfirm && <span style={{ marginLeft: 8, fontSize: 12, color: '#fa8c16' }}>整改中 — 完成整改后可发起复审</span>}
           </div>
         </div>
         <div style={{ fontSize: 12, color: '#666' }}>

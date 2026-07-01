@@ -2880,15 +2880,16 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
   // 进入 re_reviewing 时重置评审人提交状态（开启新轮次）
   let extra: Record<string, any> = {}
   if (target_state === 're_reviewing') {
-    const allReviewers = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
-    const resetReviewers: any[] = []
-    for (const r of allReviewers) {
-      const reset = { ...r, conclusion: '', risk_level: 'medium', opinion_summary: '', submitted_at: 0 }
-      await rvReviewer.set(r._key, reset)
-      resetReviewers.push(reset)
-    }
+    // 优先查实体，兜底快照
+    const snapRvrs = jsonArr((rv as any).reviewers_json || '[]')
+    const entityRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+    const allReviewers = entityRvrs.length > 0 ? entityRvrs : snapRvrs
+    // 只更新快照 JSON（一次 set），不逐个 set 实体（避免超 handler 限制）
+    const resetReviewers = allReviewers.map((r: any) => ({
+      ...r, conclusion: '', risk_level: 'medium', opinion_summary: '', submitted_at: 0,
+    }))
     extra.reviewers_json = JSON.stringify(resetReviewers)
-    // 重置 checklist
+    // 重置 checklist（存 JSON，不需要逐个 set）
     let cl = jsonArr((rv as any).checklist_json || '[]')
     for (const item of cl) { item.status = 'unchecked'; item.checked_by = ''; item.checked_at = 0 }
     extra.checklist_json = JSON.stringify(cl)
