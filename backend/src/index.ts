@@ -1343,6 +1343,10 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
     }
     const my = rvrs.find((v: any) => v.reviewer_uuid === reviewerUuid)
     if (!my) continue
+    // 按 round_no 判断是否已提交当前轮次（旧数据 round_no 缺失时视为 1）
+    const reviewRoundNo = (r as any).round_no || 1
+    const myRoundNo = (my as any).round_no || 1
+    const mySubmittedCurrentRound = my.submitted_at > 0 && myRoundNo === reviewRoundNo
     const issues = await qAll(linkedIssue, (v: any) => v.review_uuid === r.review_uuid)
     const hasResolution = (await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)).length > 0
     const rvType = (r as any).review_type || 'dcp'
@@ -1371,8 +1375,8 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
       reviewer_done: rvrs.filter((v: any) => v.submitted_at > 0).length,
       linked_issue_count: issues.length,
       my_role: my.role_name,
-      my_submitted: !!(my.submitted_at > 0),
-      my_conclusion: my.conclusion || '',
+      my_submitted: mySubmittedCurrentRound,
+      my_conclusion: mySubmittedCurrentRound ? (my.conclusion || '') : '',
       is_publisher: !!isPublisher,
       resolution_pending: isResolutionPending,
     })
@@ -2479,6 +2483,14 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   if ((normalizedFc === 'conditional_pass' || normalizedFc === 'rework') && !cn.trim()) {
     return { body: { error: '有条件通过/返工必须填写条件说明' }, statusCode: 400 }
   }
+  // conditional_pass / rework 必须至少创建一个整改项
+  if (normalizedFc === 'conditional_pass' || normalizedFc === 'rework') {
+    const remediationItems = await qAll(linkedIssue,
+      (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+    if (remediationItems.length === 0) {
+      return { body: { error: '有条件通过/返工必须至少创建一个整改工作项，请在整改项区域创建后再发布决议' }, statusCode: 400 }
+    }
+  }
 
   // 决议实体 — 多轮使用轮次相关 key
   const resKey = currentRoundNo > 1 ? `${rid}_r${currentRoundNo}` : rid
@@ -2922,16 +2934,28 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
   // 进入 re_reviewing 时重置评审人提交状态（开启新轮次）
   let extra: Record<string, any> = {}
   if (target_state === 're_reviewing') {
+    const newRoundNo = ((rv as any).round_no || 1) + 1
     // 优先查实体，兜底快照
     const snapRvrs = jsonArr((rv as any).reviewers_json || '[]')
     const entityRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
     const allReviewers = entityRvrs.length > 0 ? entityRvrs : snapRvrs
-    // 只更新快照 JSON（一次 set），不逐个 set 实体（避免超 handler 限制）
+    // 更新快照 JSON
     const resetReviewers = allReviewers.map((r: any) => ({
-      ...r, conclusion: '', risk_level: 'medium', opinion_summary: '', submitted_at: 0,
+      ...r, round_no: newRoundNo, conclusion: '', risk_level: '', opinion_summary: '', submitted_at: 0,
     }))
     extra.reviewers_json = JSON.stringify(resetReviewers)
-    // 重置 checklist（存 JSON，不需要逐个 set）
+    // 同步重置 rvReviewer 实体（submitOpinion / listMyReviews 优先读实体）
+    for (const r of entityRvrs) {
+      await rvReviewer.set(r._key, {
+        ...r,
+        round_no: newRoundNo,
+        submitted_at: 0,
+        conclusion: '',
+        risk_level: '',
+        opinion_summary: '',
+      })
+    }
+    // 重置 checklist
     let cl = jsonArr((rv as any).checklist_json || '[]')
     for (const item of cl) { item.status = 'unchecked'; item.checked_by = ''; item.checked_at = 0 }
     extra.checklist_json = JSON.stringify(cl)
@@ -3297,13 +3321,33 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
     const snap = jsonArr(newReviewersJson)
     newReviewersJson = JSON.stringify(snap.map((r: any) => ({
       ...r,
+      round_no: newRoundNo,
       submitted_at: 0,
       conclusion: '',
+      risk_level: '',
       opinion_summary: '',
     })))
+    // 同步重置 rvReviewer 实体（submitOpinion / listMyReviews 优先读实体）
+    const entityRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+    for (const r of entityRvrs) {
+      await rvReviewer.set(r._key, {
+        ...r,
+        round_no: newRoundNo,
+        submitted_at: 0,
+        conclusion: '',
+        risk_level: '',
+        opinion_summary: '',
+      })
+    }
   }
 
   const stateFields = buildStateTransition(rv, targetState, publisher_uuid, reason)
+  // 复审时重置 checklist
+  if (next_action === 're_review') {
+    let cl = jsonArr((rv as any).checklist_json || '[]')
+    for (const item of cl) { item.status = 'unchecked'; item.checked_by = ''; item.checked_at = 0 }
+    stateFields.checklist_json = JSON.stringify(cl)
+  }
   await review.set(rid, {
     ...rv,
     ...stateFields,

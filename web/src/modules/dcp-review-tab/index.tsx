@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import ReactDOM from 'react-dom'
+import { RemediationPanel } from './RemediationPanel'
 import * as api from './api'
 import { getTeamUUID, checkPermission } from '../../api'
 
@@ -70,7 +71,7 @@ async function copyReviewLink(reviewNumber: string, reviewUuid: string): Promise
   }
 }
 
-type TabKey = 'materials' | 'indicators' | 'reviewers' | 'issues' | 'checklist' | 'resolution' | 'audit' | 'timeline'
+type TabKey = 'materials' | 'indicators' | 'reviewers' | 'issues' | 'checklist' | 'resolution' | 'audit' | 'timeline' | 'remediation'
 
 // ============================================================
 // 样式
@@ -625,6 +626,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     { key: 'materials', label: '评审资料', badge: data.materials?.filter((m: any) => !!m.file_data).length },
     { key: 'reviewers', label: '评审人与意见', badge: data.reviewers?.filter((r: any) => r.submitted_at > 0).length },
     { key: 'issues', label: '关联工作项', badge: data.linked_issues?.length },
+    { key: 'remediation', label: '整改项', badge: data.remediation_issues?.length },
     { key: 'checklist', label: 'Checklist', badge: data.checklist?.length },
     { key: 'resolution', label: '决议快照' },
     { key: 'audit', label: '审计日志' },
@@ -1126,6 +1128,15 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
 
           {/* Checklist 详情（可展开） */}
           {(data.checklist || []).length > 0 && <ChecklistInlineTab checklist={data.checklist} />}
+          {/* conditional_pass / rework 整改项提醒 */}
+          {(resolutionForm.final_conclusion === 'conditional_pass' || resolutionForm.final_conclusion === 'rework') && (
+            <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff7e6', color: '#fa8c16', border: '1px solid #faad14' }}>
+              <strong>整改要求</strong>：发布「有条件通过」或「返工」决议前，必须先在「整改项」tab 中创建至少 1 个整改工作项。
+              {(data.remediation_issues || []).length > 0
+                ? <span style={{ color: '#52c41a' }}> 已创建 {data.remediation_issues.length} 个整改项。</span>
+                : <span style={{ color: '#ff4d4f' }}> 当前无整改项，请先创建。</span>}
+            </div>
+          )}
           <div style={{ marginTop: 12 }}>
             <button style={{ ...S.btn(true), background: '#faad14' }} onClick={handlePublishResolution} disabled={publishing}>
               {publishing ? '发布中…' : '发布决议'}
@@ -1162,6 +1173,40 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       {activeTab === 'resolution' && <div style={S.tabPanel}><ResolutionPanel data={data} onRefresh={onRefresh} /></div>}
       {activeTab === 'audit' && <div style={S.tabPanel}><AuditPanel reviewUuid={rv.review_uuid} /></div>}
       {activeTab === 'timeline' && <div style={S.tabPanel}><StateTimeline data={data} effState={effState} roundNo={rv.round_no || 1} /></div>}
+      {activeTab === 'remediation' && (
+        <div style={S.tabPanel}>
+          <RemediationPanel
+            data={data}
+            effState={effState}
+            currentUser={currentUser}
+            isCreator={currentUser.uuid === rv.creator_uuid}
+            isPublisher={canPublish}
+            remediationIssueType={remediationIssueType}
+            projectUuid={projectUuid}
+            remediationMsg={remediationMsg}
+            remediationRefreshing={remediationRefreshing}
+            remediationConfirming={remediationConfirming}
+            showRemediationConfirm={showRemediationConfirm}
+            showCreateRemediation={showCreateRemediation}
+            showLinkRemediation={showLinkRemediation}
+            createRemediationForm={createRemediationForm}
+            linkRemediationForm={linkRemediationForm}
+            creatingRemediation={creatingRemediation}
+            linkingRemediation={linkingRemediation}
+            onRefresh={onRefresh}
+            onSetCreateRemediationForm={setCreateRemediationForm}
+            onSetLinkRemediationForm={setLinkRemediationForm}
+            onSetShowCreateRemediation={setShowCreateRemediation}
+            onSetShowLinkRemediation={setShowLinkRemediation}
+            onSetShowRemediationConfirm={setShowRemediationConfirm}
+            onCreateRemediation={handleCreateRemediationIssue}
+            onLinkRemediation={handleLinkRemediationIssue}
+            onRefreshRemediation={handleRefreshRemediation}
+            onConfirmRemediation={handleConfirmRemediation}
+            onSetRemediationMsg={setRemediationMsg}
+          />
+        </div>
+      )}
       {copyToast && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.75)', color: '#fff', padding: '8px 20px', borderRadius: 6, fontSize: 13, zIndex: 9999 }}>{copyToast}</div>
       )}

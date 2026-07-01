@@ -1218,8 +1218,10 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  <label style={S.label}>{(resolutionForm.final_conclusion === 'conditional_pass' || resolutionForm.final_conclusion === 'rework') ? '条件说明 *' : '条件说明'}</label>
  <textarea style={S.textarea} rows={3} value={resolutionForm.condition_notes} onChange={e => setResolutionForm({ ...resolutionForm, condition_notes: e.target.value })} placeholder={(resolutionForm.final_conclusion === 'conditional_pass' || resolutionForm.final_conclusion === 'rework') ? '请填写条件说明（必填）…' : "（可选）如为'有条件通过'，请说明条件…"} />
  {(resolutionForm.final_conclusion === 'conditional_pass' || resolutionForm.final_conclusion === 'rework') && (
-   <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: '#e6f4ff', color: '#1677ff' }}>
-     发布后可在整改项区域创建/关联整改工作项，完成整改后确认闭环。
+   <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: '#fff7e6', color: '#fa8c16', border: '1px solid #faad14' }}>
+     发布前必须在评审详情页「整改项」tab 中创建至少 1 个整改工作项。{(data.remediation_issues || []).length > 0
+       ? <span style={{ color: '#52c41a' }}> 已创建 {data.remediation_issues.length} 个。</span>
+       : <span style={{ color: '#ff4d4f' }}> 当前无整改项。</span>}
    </div>
  )}
  </div>
