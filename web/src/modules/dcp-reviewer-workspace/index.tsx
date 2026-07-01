@@ -999,7 +999,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  myRole={myRole}
  isPublisher={canPublish}
  reviewUuid={rv.review_uuid}
- status={rv.status}
+ status={rv.effective_state || rv.review_state || rv.status}
  onRefresh={onRefresh}
  />
 
@@ -1438,7 +1438,10 @@ const ChecklistPanel: React.FC<{
  status: string
  onRefresh: () => void
 }> = ({ checklist, currentUser, myRole, isPublisher, reviewUuid, status, onRefresh }) => {
- const isDone = status !== 'reviewing'
+ const [errMsg, setErrMsg] = useState('')
+ // 使用 effective_state 精确判断：仅 reviewing / re_reviewing 可勾选
+ const _statusLower = (status || '').toLowerCase()
+ const isDone = _statusLower !== 'reviewing' && _statusLower !== 're_reviewing'
  const [expandedRoles, setExpandedRoles] = useState<string[]>([])
  const [toggling, setToggling] = useState<string>('')
 
@@ -1460,6 +1463,7 @@ const ChecklistPanel: React.FC<{
 
  async function toggleCheck(templateId: string, status: string) {
  setToggling(templateId)
+ setErrMsg('')
  try {
  const resp = await fetch(
  `/project/api/project/team/${getTeamUUID()}/dcp/review/${reviewUuid}/checklist`,
@@ -1474,7 +1478,7 @@ const ChecklistPanel: React.FC<{
  const data = json.body || json.data || json
  if (!resp.ok || data.error) throw new Error(data.error || `${resp.status}`)
  onRefresh()
- } catch (e: any) { /* silently ignore toggle errors */ }
+ } catch (e: any) { setErrMsg(e.message || '勾选失败') }
  finally { setToggling('') }
  }
 
@@ -1501,6 +1505,7 @@ const ChecklistPanel: React.FC<{
  return (
  <div style={{ ...S.card, marginBottom: 16 }}>
  <h4 style={S.sectionTitle}>我的 Checklist <span style={{ fontSize: 12, fontWeight: 400, color: '#666', marginLeft: 8 }}>达标率: {pass}/{total}</span></h4>
+ {errMsg && <div style={{ marginBottom: 8, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: '#fff2f0', color: '#cf1322' }}>{errMsg}</div>}
  {myItems.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map((item: any) => {
  const s = item.status || 'unchecked'
  const isToggling = toggling === item.template_id

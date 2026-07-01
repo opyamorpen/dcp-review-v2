@@ -2591,7 +2591,9 @@ export async function checkChecklist(req: any): Promise<PluginResponse> {
   }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
-  if (rv.status !== 'reviewing') {
+  // 使用 effective_state 精确判断（reviewing / re_reviewing 可操作）
+  const _chkEffState = getEffectiveState(rv)
+  if (_chkEffState !== 'reviewing' && _chkEffState !== 're_reviewing') {
     return { body: { error: '当前状态不可操作 checklist' }, statusCode: 400 }
   }
   const cl = jsonArr((rv as any).checklist_json || '[]')
