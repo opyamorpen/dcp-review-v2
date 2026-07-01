@@ -2260,6 +2260,14 @@ const STATE_TIMELINE_COLORS: Record<string, string> = {
 const StateTimeline: React.FC<{ data: any; effState: string; roundNo: number }> = ({ data, effState, roundNo }) => {
   const history: any[] = data.state_history || []
   const available: string[] = data.available_transitions || []
+  const [nameMap, setNameMap] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    const uuids = history.map((e: any) => e.by).filter((u: string) => u && u !== 'system')
+    if (uuids.length > 0) {
+      api.resolveReviewerNames([...new Set(uuids)]).then(setNameMap).catch(() => {})
+    }
+  }, [data.state_history])
 
   return (
     <div>
@@ -2306,8 +2314,7 @@ const StateTimeline: React.FC<{ data: any; effState: string; roundNo: number }> 
                   </div>
                   <div style={{ fontSize: 12, color: '#999', marginTop: 2 }}>
                     {entry.at ? new Date(entry.at).toLocaleString('zh-CN') : '-'}
-                    {entry.by && entry.by !== 'system' && <span> | 操作人: {entry.by.substring(0, 8)}</span>}
-                    {entry.by === 'system' && <span> | 系统</span>}
+                    {entry.by && entry.by !== 'system' ? <span> | 操作人: {nameMap[entry.by] || entry.by}</span> : <span> | 系统</span>}
                   </div>
                   {entry.reason && <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>{entry.reason}</div>}
                 </div>
