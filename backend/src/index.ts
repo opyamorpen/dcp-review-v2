@@ -1094,7 +1094,16 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
     ])
     Logger.info(`[DCP] getReviewDetail Promise.all ok: mats=${materials.length}, inds=${indicators.length}, entity_rvrs=${entityReviewers.length}, snap_rvrs=${snapReviewers.length}, issues=${issues.length}, res=${resList.length}, supps=${supps.length}`)
     // 优先使用实体数据（source of truth），实体为空时兜底读快照
-    const reviewers = entityReviewers.length > 0 ? entityReviewers : snapReviewers
+    let reviewers = entityReviewers.length > 0 ? entityReviewers : snapReviewers
+    // 投影到当前轮次：如果 reviewer 的 round_no 不匹配当前轮次，视为未提交
+    // （修复 confirmRemediation/transitionReview 重置实体时 qAll 返回空导致实体未更新的问题）
+    const _projRoundNo = (rv as any).round_no || 1
+    reviewers = reviewers.map((r: any) => {
+      if ((r.round_no || 1) !== _projRoundNo) {
+        return { ...r, submitted_at: 0, conclusion: '', risk_level: '', opinion_summary: '', round_no: _projRoundNo }
+      }
+      return r
+    })
     const allMatTpls = await qAll(matTpl)
     const matsWithTpl = materials.map((m: any) => ({
       ...m, template: allMatTpls.find((t: any) => t._key === m.template_id) || null,
@@ -1356,7 +1365,15 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
     const isPublisher = publisherRole && my.role_name === publisherRole
     // 按 submitRequirement 判断是否满足决议条件
     const allRoleTpls = filterRolesByType(await qAll(roleTpl), rvType)
-    const resolutionReady = isResolutionReady(rule, rvrs, allRoleTpls)
+    // 投影到当前轮次：旧轮次的提交数据视为未提交（与 getReviewDetail/submitOpinion 保持一致）
+    const _listRoundNo = (r as any).round_no || 1
+    const rvrsProjected = rvrs.map((rvr: any) => {
+      if ((rvr.round_no || 1) !== _listRoundNo) {
+        return { ...rvr, submitted_at: 0, conclusion: '', risk_level: '', opinion_summary: '', round_no: _listRoundNo }
+      }
+      return rvr
+    })
+    const resolutionReady = isResolutionReady(rule, rvrsProjected, allRoleTpls)
     const isResolutionPending = !!(isPublisher && resolutionReady && !hasResolution && r.status === 'reviewing')
     const meta = projectMetaMap[r.project_uuid] || {}
     results.push({
@@ -2092,12 +2109,14 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
     const snap = jsonArr((rv as any).reviewers_json || '[]')
     all = snap.map((s: any) => s._key ? s : { ...s, _key: `${rid}_snap_${Math.random().toString(36).slice(2, 6)}` })
   }
-  // 按当前轮次过滤：只看当前轮次的评审人记录
+  // 按 uuid+role 查找评审人（不限制 round_no，兼容实体未被更新的情况）
   const target = all.find((r: any) =>
-    r.reviewer_uuid === reviewer_uuid && r.role_name === role_name &&
-    ((r.round_no || 1) === currentRoundNo))
-  if (!target) return { body: { error: '未找到该评审人在当前轮次的记录' }, statusCode: 404 }
-  if (target.submitted_at > 0) return { body: { error: '该评审人在当前轮次已提交过意见' }, statusCode: 409 }
+    r.reviewer_uuid === reviewer_uuid && r.role_name === role_name)
+  if (!target) return { body: { error: '未找到该评审人的记录' }, statusCode: 404 }
+  // 检查是否已在当前轮次提交（round_no 不匹配视为未提交）
+  if (target.submitted_at > 0 && (target.round_no || 1) === currentRoundNo) {
+    return { body: { error: '该评审人在当前轮次已提交过意见' }, statusCode: 409 }
+  }
 
   // 评审人选「有条件通过」时，必须已创建至少 1 个整改工作项
   if (conclusion === 'conditional_pass') {
@@ -2412,6 +2431,14 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   if (allRvrs.length === 0) {
     return { body: { error: '未找到评审人记录' }, statusCode: 400 }
   }
+  // 投影到当前轮次：旧轮次的提交数据视为未提交
+  const _pubRoundNo = (rv as any).round_no || 1
+  allRvrs = allRvrs.map((r: any) => {
+    if ((r.round_no || 1) !== _pubRoundNo) {
+      return { ...r, submitted_at: 0, conclusion: '', risk_level: '', opinion_summary: '', round_no: _pubRoundNo }
+    }
+    return r
+  })
 
   // 校验：操作人必须是评审人
   const publisherReviewer = allRvrs.find((r: any) => r.reviewer_uuid === puuid)
