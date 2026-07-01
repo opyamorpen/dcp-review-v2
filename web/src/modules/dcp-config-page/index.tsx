@@ -128,8 +128,8 @@ const App: React.FC = () => {
  ))}
  </div>
  <div style={S.content}>
- {/* DCP / TR 类型切换（IPD流程图为全局配置，不区分 DCP/TR） */}
- {nav !== 'ipdflow' && (
+ {/* DCP / TR 类型切换（IPD流程图、通知设置、撤回设置、整改设置为全局配置，不区分 DCP/TR） */}
+ {nav !== 'ipdflow' && nav !== 'notify' && nav !== 'recall' && nav !== 'remediation' && (
  <div style={{ display: 'flex', gap: 0, marginBottom: 16, borderBottom: '1px solid #e8e8e8' }}>
  {(['dcp', 'tr'] as const).map(t => (
  <button key={t} onClick={() => setReviewType(t)}

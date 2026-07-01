@@ -90,13 +90,13 @@ abilities:
     config:
       - fieldType: Input
         key: issueTypeScope
-        show: true
-        label: '工作项类型（留空=全部）'
+        show: false
+        label: 工作项类型（留空=全部）
         value: ''
       - fieldType: Input
         key: field
-        show: true
-        label: '工作项属性（留空=全部）'
+        show: false
+        label: 工作项属性（留空=全部）
         value: ''
 apis:
   - type: external
