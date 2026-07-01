@@ -50,20 +50,29 @@ export const RemediationPanel: React.FC<{
   onSetRemediationMsg: (v: string) => void
 }> = (props) => {
   const { data, effState, isCreator, isPublisher } = props
-  const issues: any[] = data.remediation_issues || []
+  const allIssues: any[] = data.linked_issues || []
+  const remediationIssues: any[] = data.remediation_issues || []
   const allDone = data.remediation_all_done
   const isRemediationPhase = effState === 'remediation_pending'
 
-  // 整改项列表
-  const issueRows = issues.map((iss: any, i: number) => {
+  // 工作项列表（全部），用 badge 区分类型
+  const issueRows = allIssues.map((iss: any, i: number) => {
     const st = iss.issue_status || 'open'
+    const isRemediation = iss.link_type === 'remediation'
     return (
       <tr key={i}>
         <td style={S.td}>{iss.issue_number || '-'}</td>
         <td style={S.td}>{iss.issue_title || '-'}</td>
         <td style={S.td}>{iss.issue_type || '-'}</td>
-        <td style={S.td}><span style={{ color: STATUS_COLORS[st] || '#999' }}>{STATUS_LABELS[st] || st}</span></td>
-        <td style={S.td}>{iss.locked === 'locked' ? '🔒 已锁定' : '—'}</td>
+        <td style={S.td}>
+          <span style={{ color: STATUS_COLORS[st] || '#999' }}>{STATUS_LABELS[st] || st}</span>
+        </td>
+        <td style={S.td}>
+          {isRemediation
+            ? <span style={{ padding: '1px 6px', borderRadius: 3, background: '#fff7e6', color: '#fa8c16', fontSize: 11, border: '1px solid #faad14' }}>整改项</span>
+            : <span style={{ padding: '1px 6px', borderRadius: 3, background: '#e6f4ff', color: '#1677ff', fontSize: 11, border: '1px solid #91caff' }}>评审问题</span>}
+        </td>
+        <td style={S.td}>{iss.locked === 'locked' ? '🔒' : '—'}</td>
       </tr>
     )
   })
@@ -71,8 +80,8 @@ export const RemediationPanel: React.FC<{
   return (
     <div>
       <div style={S.sectionTitle}>
-        整改工作项
-        {isRemediationPhase && issues.length > 0 && (
+        工作项（{allIssues.length}个，整改项 {remediationIssues.length}个）
+        {isRemediationPhase && remediationIssues.length > 0 && (
           <button style={{ ...S.btn(false), marginLeft: 12, fontSize: 12 }} onClick={props.onRefreshRemediation} disabled={props.remediationRefreshing}>
             {props.remediationRefreshing ? '刷新中…' : '刷新状态'}
           </button>
@@ -83,12 +92,12 @@ export const RemediationPanel: React.FC<{
         <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#cf1322' }}>{props.remediationMsg}</div>
       )}
 
-      {issues.length === 0 ? (
+      {allIssues.length === 0 ? (
         <div style={{ color: '#999', padding: 24, textAlign: 'center', background: '#fafafa', borderRadius: 8, marginBottom: 16 }}>
-          暂无整改工作项
-          {isRemediationPhase && (
+          暂无工作项
+          {(isRemediationPhase || effState === 'reviewing' || effState === 'awaiting_resolution') && (
             <div style={{ marginTop: 8 }}>
-              <button style={S.btn(true)} onClick={() => { props.onSetShowCreateRemediation(true); props.onSetRemediationMsg('') }}>+ 创建整改项</button>
+              <button style={S.btn(true)} onClick={() => { props.onSetShowCreateRemediation(true); props.onSetRemediationMsg('') }}>+ 创建工作项</button>
               <button style={{ ...S.btn(false), marginLeft: 8 }} onClick={() => { props.onSetShowLinkRemediation(true); props.onSetRemediationMsg('') }}>关联已有工作项</button>
             </div>
           )}
@@ -98,15 +107,15 @@ export const RemediationPanel: React.FC<{
           <div style={S.tableWrap}>
             <table style={S.table}>
               <thead><tr>
-                <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={S.th}>类型</th><th style={S.th}>状态</th><th style={S.th}>锁定</th>
+                <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={S.th}>类型</th><th style={S.th}>状态</th><th style={S.th}>分类</th><th style={S.th}>锁定</th>
               </tr></thead>
               <tbody>{issueRows}</tbody>
             </table>
           </div>
 
-          {isRemediationPhase && (
+          {(isRemediationPhase || effState === 'reviewing' || effState === 'awaiting_resolution') && (
             <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button style={S.btn(true)} onClick={() => { props.onSetShowCreateRemediation(true); props.onSetRemediationMsg('') }}>+ 创建整改项</button>
+              <button style={S.btn(true)} onClick={() => { props.onSetShowCreateRemediation(true); props.onSetRemediationMsg('') }}>+ 创建工作项</button>
               <button style={S.btn(false)} onClick={() => { props.onSetShowLinkRemediation(true); props.onSetRemediationMsg('') }}>关联已有工作项</button>
             </div>
           )}
@@ -147,7 +156,7 @@ export const RemediationPanel: React.FC<{
       {/* 创建整改项表单 */}
       {props.showCreateRemediation && (
         <div style={{ ...S.card, marginTop: 16, background: '#f0f5ff' }}>
-          <div style={S.sectionTitle}>创建整改工作项</div>
+          <div style={S.sectionTitle}>创建工作项</div>
           <div style={{ marginBottom: 8 }}>
             <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>标题 *</label>
             <input style={S.input} value={props.createRemediationForm.title}

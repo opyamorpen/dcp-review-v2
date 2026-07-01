@@ -862,6 +862,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  issue_status: 'open',
  linked_by: currentUser.uuid || '',
  linked_by_name: currentUser.name || '',
+ link_type: 'remediation',
  })
  } catch {}
  const firstType = issueTypes[0] || ({} as any)
@@ -1060,6 +1061,14 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
    <label style={S.label}>意见摘要</label>
    <textarea style={S.textarea} rows={4} value={opinionForm.opinion_summary} onChange={e => setOpinionForm({ ...opinionForm, opinion_summary: e.target.value })} placeholder="输入评审意见摘要…" />
  </div>
+ {opinionForm.conclusion === 'conditional_pass' && (
+   <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#fff7e6', color: '#fa8c16', border: '1px solid #faad14' }}>
+     选择「有条件通过」时，必须先在下方创建至少 1 个整改项后再提交。
+     {issues.some((iss: any) => iss.link_type === 'remediation')
+       ? <span style={{ color: '#52c41a' }}> 已创建整改项。</span>
+       : <span style={{ color: '#ff4d4f' }}> 当前无整改项，请先创建。</span>}
+   </div>
+ )}
  {opinionToast && <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#f6ffed', color: '#52c41a', border: '1px solid #b7eb8f' }}>{opinionToast}</div>}
  <button style={{ ...S.btn(true), marginTop: 8 }} onClick={submitOpinion} disabled={submittingOpinion}>{submittingOpinion ? '提交中…' : '提交评审意见'}</button>
  </>
@@ -1317,9 +1326,9 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  )
  })()}
 
- {/* 关联工作项（仅我创建的） */}
+ {/* 整改工作项（仅我创建的） */}
  <div style={S.card}>
- <h4 style={S.sectionTitle}>我的工作项（{issues.length}个）</h4>
+ <h4 style={S.sectionTitle}>我的整改项（{issues.length}个）</h4>
  {allIssues.length > issues.length && <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>（共 {allIssues.length} 个关联工作项，仅显示你创建的 {issues.length} 个）</div>}
  {issues.length === 0 ? <div style={{ color: '#999', padding: 12, textAlign: 'center', fontSize: 13 }}>{allIssues.length > 0 ? '其他评审人已创建工作项，你尚未创建' : '暂无关联工作项'}</div> :
  <table style={S.table}>
@@ -1343,7 +1352,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  </tbody>
  </table>}
  <div style={{ marginTop: 16, borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
- <h4 style={{ ...S.sectionTitle, fontSize: 13 }}>+ 新建工作项（ON API 直接创建）</h4>
+ <h4 style={{ ...S.sectionTitle, fontSize: 13 }}>+ 创建整改项</h4>
  {createIssueMsg && <div style={{ marginBottom: 8, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: createIssueFallback ? '#fff7e6' : '#fff2f0', color: createIssueFallback ? '#faad14' : '#cf1322' }}>{createIssueMsg}
  {createIssueFallback && (
  <div style={{ marginTop: 8 }}>
@@ -1388,7 +1397,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  </div>
  <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
  <button style={{ ...S.btn(true), marginBottom: 0 }} onClick={handleCreateIssue} disabled={creating}>
- {creating ? '创建中…' : '新建工作项'}
+ {creating ? '创建中…' : '创建整改项'}
  </button>
  <button style={{ ...S.btn(false), marginBottom: 0 }} onClick={resolveAndOpenCreateIssue} disabled={resolvingProject}>
  {resolvingProject ? '解析中…' : '跳转ONES手动创建'}

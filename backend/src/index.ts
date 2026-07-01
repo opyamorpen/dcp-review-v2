@@ -2097,6 +2097,16 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
     ((r.round_no || 1) === currentRoundNo))
   if (!target) return { body: { error: '未找到该评审人在当前轮次的记录' }, statusCode: 404 }
   if (target.submitted_at > 0) return { body: { error: '该评审人在当前轮次已提交过意见' }, statusCode: 409 }
+
+  // 评审人选「有条件通过」时，必须已创建至少 1 个整改工作项
+  if (conclusion === 'conditional_pass') {
+    const remediationItems = await qAll(linkedIssue,
+      (v: any) => v.review_uuid === rid && v.link_type === 'remediation' && v.linked_by === reviewer_uuid)
+    if (remediationItems.length === 0) {
+      return { body: { error: '选择「有条件通过」时，必须先创建至少 1 个整改工作项' }, statusCode: 400 }
+    }
+  }
+
   const ts = Date.now()
   const newData = {
     review_uuid: rid, reviewer_uuid, role_name,

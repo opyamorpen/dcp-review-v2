@@ -71,7 +71,7 @@ async function copyReviewLink(reviewNumber: string, reviewUuid: string): Promise
   }
 }
 
-type TabKey = 'materials' | 'indicators' | 'reviewers' | 'issues' | 'checklist' | 'resolution' | 'audit' | 'timeline' | 'remediation'
+type TabKey = 'materials' | 'indicators' | 'reviewers' | 'remediation' | 'checklist' | 'resolution' | 'audit' | 'timeline'
 
 // ============================================================
 // 样式
@@ -625,8 +625,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   const TABS: { key: TabKey; label: string; badge?: number }[] = [
     { key: 'materials', label: '评审资料', badge: data.materials?.filter((m: any) => !!m.file_data).length },
     { key: 'reviewers', label: '评审人与意见', badge: data.reviewers?.filter((r: any) => r.submitted_at > 0).length },
-    { key: 'issues', label: '关联工作项', badge: data.linked_issues?.length },
-    { key: 'remediation', label: '整改项', badge: data.remediation_issues?.length },
+    { key: 'remediation', label: '工作项', badge: (data.linked_issues || []).length },
     { key: 'checklist', label: 'Checklist', badge: data.checklist?.length },
     { key: 'resolution', label: '决议快照' },
     { key: 'audit', label: '审计日志' },
@@ -1157,7 +1156,6 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       {/* 内容区 */}
       {activeTab === 'materials' && <div style={S.tabPanel}><MaterialsPanel data={data} editable={isEditable} onRefresh={onRefresh} currentUser={currentUser} /></div>}
       {activeTab === 'reviewers' && <div style={S.tabPanel}><ReviewersPanel data={data} editable={isEditable} isReviewing={isReviewing} onRefresh={onRefresh} currentUser={currentUser} /></div>}
-      {activeTab === 'issues' && <div style={S.tabPanel}><LinkedIssuesPanel data={data} projectUuid={projectUuid} projectKey={projectKey} componentUuid={componentUuid} viewUuid={viewUuid} onRefresh={onRefresh} /></div>}
       {activeTab === 'checklist' && (
         <div style={S.tabPanel}>
           {(data.checklist || []).length === 0 ? (
