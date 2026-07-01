@@ -3301,8 +3301,35 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
     return { body: { error: '请先创建或关联整改工作项' }, statusCode: 400 }
   }
 
+  // 实时同步整改项状态（不依赖事件 handler 快照）
+  if (tuid) {
+    for (const item of items) {
+      try {
+        const res = await OPFetch(
+          `/project/api/project/team/${tuid}/tasks/${item.issue_uuid}`,
+          { method: 'GET', teamUUID: tuid }
+        ) as any
+        const statusName = res?.status?.name || res?.data?.status?.name || res?.status || ''
+        const statusID = res?.status?.id || res?.data?.status?.id || res?.status_uuid || ''
+        if (statusName) {
+          const isDone = await checkStatusIsDone(tuid, statusID, statusName)
+          if (item.issue_status !== (isDone ? 'done' : statusName)) {
+            await linkedIssue.set(item._key, {
+              ...item,
+              issue_status: isDone ? 'done' : statusName,
+            })
+          }
+        }
+      } catch {}
+    }
+  }
+
+  // 重新读取同步后的整改项
+  const syncedItems = await qAll(linkedIssue,
+    (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+
   // 校验：所有整改项已完成
-  const notDone = items.filter((v: any) => v.issue_status !== 'done')
+  const notDone = syncedItems.filter((v: any) => v.issue_status !== 'done')
   if (notDone.length > 0) {
     return {
       body: {
@@ -3319,7 +3346,7 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
   if (tuid) {
     const reviewNumber = (rv as any).review_number || rid
     const commentText = `整改已由决议人确认完成（评审单 ${reviewNumber}）。本工作项已锁定，请勿再修改。`
-    for (const item of items) {
+    for (const item of syncedItems) {
       try {
         await OPFetch(
           `/project/api/project/team/${tuid}/items/graphql?t=addComment`,
@@ -3339,7 +3366,7 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
   }
 
   // 2. 锁定工作项（更新 linkedIssue.locked）
-  for (const item of items) {
+  for (const item of syncedItems) {
     await linkedIssue.set(item._key, {
       ...item,
       locked: 'locked',
@@ -3397,12 +3424,12 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
   })
 
   await writeAudit(rid, publisher_uuid, '确认整改完成', rid,
-    `整改项 ${items.length} 个全部完成，${next_action === 're_review' ? '进入复审' : '评审完成'}`)
+    `整改项 ${syncedItems.length} 个全部完成，${next_action === 're_review' ? '进入复审' : '评审完成'}`)
 
   // 4. 通知整改负责人工作项已锁定
   const notCfg = await getNotifyConfig()
   if (notCfg.enabled) {
-    const ownerUUIDs = [...new Set(items.map((v: any) => v.linked_by).filter(Boolean))] as string[]
+    const ownerUUIDs = [...new Set(syncedItems.map((v: any) => v.linked_by).filter(Boolean))] as string[]
     if (ownerUUIDs.length > 0) {
       sendNotification(
         `${((rv as any).review_type || 'dcp').toUpperCase()}整改已确认 — ${(rv as any).phase_code || ''}`,
