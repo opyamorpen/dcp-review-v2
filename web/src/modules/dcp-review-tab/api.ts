@@ -134,3 +134,9 @@ export const getAuditLog = (uuid: string) => callApi(`/dcp/review/${uuid}/audit-
 // ---- 催办 ----
 export const remindReview = (uuid: string, data: { target: 'reviewers' | 'resolution'; operator_uuid: string; operator_name?: string }) =>
   callApi(`/dcp/review/${uuid}/remind`, { method: 'POST', body: JSON.stringify(data) })
+
+// ---- 状态机 ----
+export const transitionReview = (uuid: string, data: { target_state: string; operator_uuid: string; reason?: string }) =>
+  callApi(`/dcp/review/${uuid}/transition`, { method: 'POST', body: JSON.stringify(data) })
+export const getReviewState = (uuid: string) => callApi(`/dcp/review/${uuid}/state`)
+export const getReviewRounds = (uuid: string) => callApi(`/dcp/review/${uuid}/rounds`)

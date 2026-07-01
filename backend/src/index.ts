@@ -300,7 +300,38 @@ async function resolveProjectMeta(teamUUID: string, projectKey: string): Promise
 }
 
 export async function Enable() {
-  Logger.info('[DCP v1.5.2] Enable — ReviewerWorkspace ready')
+  Logger.info('[DCP v1.18.0] Enable — 状态机迁移 + ReviewerWorkspace ready')
+
+  // 状态机迁移：为旧数据回填 review_state / round_no / round_state
+  try {
+    const allReviews = await qAll(review)
+    let migrated = 0
+    for (const rv of allReviews) {
+      if (rv.review_state) continue  // 已有 review_state，跳过
+      const derivedState = getEffectiveState(rv)
+      await review.set(rv.review_uuid, {
+        ...rv,
+        review_state: derivedState,
+        round_no: Number(rv.round_no) || 1,
+        round_state: stateToRoundState(derivedState),
+        state_history_json: JSON.stringify([{
+          state: derivedState,
+          at: Date.now(),
+          by: 'system',
+          reason: '迁移：从旧 status 回填',
+          round_no: Number(rv.round_no) || 1,
+          from_state: '',
+        }]),
+      })
+      migrated++
+    }
+    if (migrated > 0) {
+      Logger.info(`[DCP] 状态机迁移完成：${migrated} 条评审单已回填 review_state`)
+    }
+  } catch (e) {
+    Logger.info('[DCP] 状态机迁移跳过（可能已迁移或无数据）')
+  }
+
   const n = await roleTpl.query().count()
   if (n > 0) return
   const roles = [
@@ -621,6 +652,114 @@ function isResolutionReady(rule: any, reviewers: any[], roleTemplates: any[]): b
 }
 
 // ============================================================
+// 状态机 — 完整状态流转
+// ============================================================
+
+// 主状态枚举
+const REVIEW_STATES = [
+  'draft', 'ready', 'reviewing', 'awaiting_resolution',
+  'resolution_published', 'remediation_pending', 're_reviewing',
+  'completed', 'rejected', 'canceled', 'archived',
+] as const
+
+// 合法流转表
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  draft:               ['ready', 'reviewing', 'canceled'],
+  ready:               ['reviewing', 'draft', 'canceled'],
+  reviewing:           ['awaiting_resolution', 'remediation_pending', 'draft', 'canceled'],
+  awaiting_resolution: ['resolution_published', 'remediation_pending', 'reviewing', 'canceled'],
+  resolution_published:['completed', 'rejected', 'remediation_pending'],
+  remediation_pending: ['re_reviewing', 'canceled'],
+  re_reviewing:        ['awaiting_resolution', 'canceled'],
+  completed:           ['archived'],
+  rejected:            ['draft', 'archived'],
+  canceled:            ['archived', 'draft', 'reviewing'],
+  archived:            [],
+}
+
+// review_state → 旧 status 兼容映射
+function stateToStatus(reviewState: string): string {
+  switch (reviewState) {
+    case 'draft': case 'ready': case 'canceled': return 'draft'
+    case 'reviewing': case 'awaiting_resolution': case 're_reviewing': case 'remediation_pending': return 'reviewing'
+    case 'completed': case 'archived': return 'completed'
+    case 'rejected': return 'rejected'
+    default: return 'draft'
+  }
+}
+
+// review_state → round_state 映射
+function stateToRoundState(reviewState: string): string {
+  switch (reviewState) {
+    case 'draft': case 'ready': return 'draft'
+    case 'reviewing': return 'running'
+    case 'awaiting_resolution': return 'waiting_resolution'
+    case 'resolution_published': return 'resolved'
+    case 'remediation_pending': return 'remediation_pending'
+    case 're_reviewing': return 're_reviewing'
+    case 'completed': case 'rejected': case 'canceled': case 'archived': return 'closed'
+    default: return 'draft'
+  }
+}
+
+// 从实体读取有效 review_state（兼容旧数据：review_state 为空时从 status 推导）
+function getEffectiveState(rv: any): string {
+  if (rv.review_state) return rv.review_state
+  // 旧数据兼容：status → review_state
+  const s = rv.status || 'draft'
+  if (s === 'draft') return 'draft'
+  if (s === 'reviewing') return 'reviewing'
+  if (s === 'completed') return 'completed'
+  if (s === 'rejected') return 'rejected'
+  return 'draft'
+}
+
+// 追加状态历史记录，返回新 JSON 字符串
+function appendStateHistory(rv: any, newState: string, by: string, reason: string): string {
+  const history = jsonArr(rv.state_history_json || '[]')
+  history.push({
+    state: newState,
+    at: Date.now(),
+    by: by || '',
+    reason: reason || '',
+    round_no: Number(rv.round_no || 1),
+    from_state: getEffectiveState(rv),
+  })
+  // 保留最近 100 条，防止 32KB 溢出
+  if (history.length > 100) history.splice(0, history.length - 100)
+  return JSON.stringify(history)
+}
+
+// 校验流转合法性
+function isValidTransition(from: string, to: string): boolean {
+  const valid = VALID_TRANSITIONS[from] || []
+  return valid.includes(to)
+}
+
+// 执行状态流转（写入 review 实体 + 历史记录）
+// 不单独 set——调用方在已有的 review.set 中合并新字段
+function buildStateTransition(rv: any, newState: string, by: string, reason: string, extra?: Record<string, any>): Record<string, any> {
+  const currentState = getEffectiveState(rv)
+  const historyJson = appendStateHistory(rv, newState, by, reason)
+  const newStatus = stateToStatus(newState)
+  const newRoundState = stateToRoundState(newState)
+  // 进入 re_reviewing 时开启新轮次
+  let newRoundNo = Number(rv.round_no || 1)
+  if (newState === 're_reviewing' && currentState === 'remediation_pending') {
+    newRoundNo = newRoundNo + 1
+  }
+  return {
+    ...extra,
+    review_state: newState,
+    status: newStatus,
+    round_no: newRoundNo,
+    round_state: newRoundState,
+    state_history_json: historyJson,
+    updated_at: Date.now(),
+  }
+}
+
+// ============================================================
 // 配置
 // ============================================================
 export async function getPluginConfig(_req: any): Promise<PluginResponse> {
@@ -751,7 +890,15 @@ export async function createReview(req: any): Promise<PluginResponse> {
   await review.set(rvUuid, {
     review_uuid: rvUuid, project_uuid, phase_code,
     review_title: review_title || 'DCP评审', meeting_time: meeting_time || 0,
-    status: 'draft', creator_uuid: creator_uuid || '',
+    status: 'draft',
+    review_state: 'draft',
+    round_no: 1,
+    round_state: 'draft',
+    state_history_json: JSON.stringify([{
+      state: 'draft', at: now, by: creator_uuid || 'system',
+      reason: '创建评审单', round_no: 1, from_state: '',
+    }]),
+    creator_uuid: creator_uuid || '',
     created_at: now, updated_at: now,
     review_number: reviewNumber,
     review_type: reviewType,
@@ -867,6 +1014,13 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
     review_title: srcRv.review_title || 'DCP评审',
     meeting_time: 0,
     status: 'draft',
+    review_state: 'draft',
+    round_no: 1,
+    round_state: 'draft',
+    state_history_json: JSON.stringify([{
+      state: 'draft', at: now, by: operator_uuid || 'system',
+      reason: `重新发起（源: ${srcRv.review_number || srcRid}）`, round_no: 1, from_state: '',
+    }]),
     creator_uuid: operator_uuid || srcRv.creator_uuid || '',
     created_at: now,
     updated_at: now,
@@ -933,13 +1087,14 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
     const [materials, indicators, entityReviewers, issues, resList, supps] = await Promise.all([
       qAll(matItem, (v: any) => v.review_uuid === rid),
       qAll(indData, (v: any) => v.review_uuid === rid),
-      snapReviewers.length > 0 ? Promise.resolve(snapReviewers) : qAll(rvReviewer, (v: any) => v.review_uuid === rid),
+      qAll(rvReviewer, (v: any) => v.review_uuid === rid),
       qAll(linkedIssue, (v: any) => v.review_uuid === rid),
       qAll(resolution, (v: any) => v.review_uuid === rid),
       qAll(supplement, (v: any) => v.review_uuid === rid),
     ])
-    Logger.info(`[DCP] getReviewDetail Promise.all ok: mats=${materials.length}, inds=${indicators.length}, reviewers=${entityReviewers.length}, issues=${issues.length}, res=${resList.length}, supps=${supps.length}`)
-    const reviewers = entityReviewers
+    Logger.info(`[DCP] getReviewDetail Promise.all ok: mats=${materials.length}, inds=${indicators.length}, entity_rvrs=${entityReviewers.length}, snap_rvrs=${snapReviewers.length}, issues=${issues.length}, res=${resList.length}, supps=${supps.length}`)
+    // 优先使用实体数据（source of truth），实体为空时兜底读快照
+    const reviewers = entityReviewers.length > 0 ? entityReviewers : snapReviewers
     const allMatTpls = await qAll(matTpl)
     const matsWithTpl = materials.map((m: any) => ({
       ...m, template: allMatTpls.find((t: any) => t._key === m.template_id) || null,
@@ -949,8 +1104,9 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
       ...i, template: allIndTpls.find((t: any) => t._key === i.template_id) || null,
     }))
     Logger.info(`[DCP] getReviewDetail building response`)
+    const _rvEffState = getEffectiveState(rv)
     return { body: {
-      review: rvWithPhase,
+      review: { ...rvWithPhase, effective_state: _rvEffState },
       materials: matsWithTpl,
       indicators: indsWithTpl,
       reviewers,
@@ -958,6 +1114,8 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
       resolution: resList[0] || null,
       supplements: supps.sort((a: any, b: any) => (b.submitted_at || 0) - (a.submitted_at || 0)),
       checklist: jsonArr((rv as any).checklist_json || '[]'),
+      state_history: jsonArr((rv as any).state_history_json || '[]'),
+      available_transitions: VALID_TRANSITIONS[_rvEffState] || [],
     }}
   } catch (e: any) {
     // ONES SDK 异常可能不是标准 Error，把完整对象序列化用于诊断
@@ -1027,6 +1185,7 @@ export async function listReviewsByProject(req: any): Promise<PluginResponse> {
 
     return {
       ...r,
+      effective_state: getEffectiveState(r),
       phase_name: phMap.get(r.phase_code) || '',
       reviewer_total: reviewers.length,
       reviewer_done: submitted,
@@ -1111,6 +1270,7 @@ export async function listTeamReviews(req: any): Promise<PluginResponse> {
     const meta = projectMetaMap[r.project_uuid] || {}
     return {
       ...r,
+      effective_state: getEffectiveState(r),
       project_identifier: meta.project_identifier || r.project_uuid,
       project_real_uuid: meta.project_real_uuid || '',
       project_name: meta.project_name || r.project_uuid,
@@ -1196,6 +1356,7 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
       phase_name: phMap.get(r.phase_code) || '',
       review_title: r.review_title,
       status: r.status,
+      effective_state: getEffectiveState(r),
       review_type: r.review_type || 'dcp',
       meeting_time: r.meeting_time,
       created_at: r.created_at,
@@ -1212,9 +1373,17 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
   results.sort((a, b) => (b.created_at || 0) - (a.created_at || 0))
   // 拆分三类：待我评审 / 待我决议 / 已完成
   // 决议人不进入"待我评审"；"待我决议"只在前置评审满足提交要求后出现
-  const review_pending = results.filter(r => r.status === 'reviewing' && !r.my_submitted && !r.is_publisher)
+  // 使用 effective_state 做精确分类：reviewing/re_reviewing → 待评审；awaiting_resolution → 待决议
+  const review_pending = results.filter(r => 
+    (r.effective_state === 'reviewing' || r.effective_state === 're_reviewing') 
+    && !r.my_submitted && !r.is_publisher
+  )
   const resolution_pending = results.filter(r => r.resolution_pending)
-  const done = results.filter(r => r.my_submitted || r.status === 'completed' || r.status === 'rejected')
+  const done = results.filter(r => 
+    r.my_submitted || r.status === 'completed' || r.status === 'rejected'
+    || r.effective_state === 'remediation_pending'
+    || r.effective_state === 'resolution_published'
+  )
   return { body: { reviews: results, review_pending, resolution_pending, done, pending: review_pending } }
 }
 
@@ -1337,8 +1506,10 @@ export async function startReview(req: any): Promise<PluginResponse> {
     }))
     checklistJson = JSON.stringify(initList)
   }
-  await review.set(rid, { ...rv, status: 'reviewing', checklist_json: checklistJson, updated_at: now })
-  await writeAudit(rid, (req.body || {} as any).operator_uuid || '', '启动评审', rid,
+  const opUuid = (req.body || {} as any).operator_uuid || ''
+  const stateFields = buildStateTransition(rv, 'reviewing', opUuid, '发起评审', { checklist_json: checklistJson })
+  await review.set(rid, { ...rv, ...stateFields })
+  await writeAudit(rid, opUuid, '启动评审', rid,
     `评审已发起，共 ${reviewers.length} 名评审人`)
 
   // 通知评审人（非阻塞）
@@ -1357,7 +1528,7 @@ export async function startReview(req: any): Promise<PluginResponse> {
     }
   }
 
-  return { body: { ok: true, status: 'reviewing' } }
+  return { body: { ok: true, status: 'reviewing', review_state: 'reviewing' } }
 }
 
 // ============================================================
@@ -1382,6 +1553,11 @@ export async function recallReview(req: any): Promise<PluginResponse> {
 
   if (rv.status !== 'reviewing') {
     return { body: { error: '仅评审中的评审单可以撤回' }, statusCode: 400 }
+  }
+  // 精确状态校验：reviewing / awaiting_resolution 可撤回
+  const _recallEffState = getEffectiveState(rv)
+  if (_recallEffState !== 'reviewing' && _recallEffState !== 'awaiting_resolution') {
+    return { body: { error: '当前状态不可撤回' }, statusCode: 400 }
   }
 
   if (rv.creator_uuid !== operator_uuid) {
@@ -1427,18 +1603,17 @@ export async function recallReview(req: any): Promise<PluginResponse> {
   } catch { /* ignore */ }
 
   // 回到 draft 状态，清空决议通知状态
-  await review.set(rid, {
-    ...rv,
-    status: 'draft',
+  const stateFields = buildStateTransition(rv, 'canceled', operator_uuid, `撤回评审：${reason || '未填写'}`, {
     checklist_json: checklistJson,
     reviewers_json: JSON.stringify(resetReviewers),
-    updated_at: now,
   })
+  // canceled 的兼容 status = draft
+  await review.set(rid, { ...rv, ...stateFields })
 
   await writeAudit(rid, operator_uuid, '撤回评审', rid,
     `评审已撤回，回到草稿状态。原因：${reason || '未填写'}`)
 
-  return { body: { ok: true, status: 'draft' } }
+  return { body: { ok: true, status: 'draft', review_state: 'canceled' } }
 }
 
 // ============================================================
@@ -1878,6 +2053,11 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
   if (rv.status !== 'reviewing') {
     return { body: { error: '当前状态不可提交评审意见' }, statusCode: 400 }
   }
+  // 精确状态校验：仅 reviewing / re_reviewing 可提交意见
+  const _effState = getEffectiveState(rv)
+  if (_effState !== 'reviewing' && _effState !== 're_reviewing') {
+    return { body: { error: '当前状态不可提交评审意见' }, statusCode: 400 }
+  }
   // 优先从实体查询评审人，兜底从 reviewers_json 快照读取
   let all = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
   if (all.length === 0) {
@@ -1896,43 +2076,53 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
   }
   await rvReviewer.set(target._key, newData)
   // 同步更新 reviewers_json 快照，确保 qAll 回退路径读到最新数据
+  // 同时检查是否满足决议前置条件 → 合并状态流转到同一次 set
+  const curSnap = jsonArr((rv as any).reviewers_json || '[]')
+  const updatedSnap = curSnap.map((s: any) =>
+    (s.reviewer_uuid === reviewer_uuid && s.role_name === role_name)
+      ? { ...s, ...newData, _key: s._key || target._key }
+      : s
+  )
+  // 检查决议前置条件
+  const _rvType = (rv as any).review_type || 'dcp'
+  const _rule = await getResolutionRuleByType(_rvType)
+  const _pubRole = getPublisherRole(_rule)
+  let _ready = false
+  if (_pubRole && updatedSnap.length > 0) {
+    const _allRoleTpls = filterRolesByType(await qAll(roleTpl), _rvType)
+    _ready = isResolutionReady(_rule, updatedSnap, _allRoleTpls)
+  }
+  // 合并 review.set：快照更新 + 可能的状态流转
+  let reviewUpdate: any = { ...rv, reviewers_json: JSON.stringify(updatedSnap), updated_at: ts }
+  let transitioned = false
+  if (_ready) {
+    const currentState = getEffectiveState(rv)
+    if (currentState === 'reviewing' || currentState === 're_reviewing') {
+      const stateFields = buildStateTransition(rv, 'awaiting_resolution', reviewer_uuid, '前置评审完成，进入待决议')
+      reviewUpdate = { ...reviewUpdate, ...stateFields }
+      transitioned = true
+    }
+  }
   try {
-    const curSnap = jsonArr((rv as any).reviewers_json || '[]')
-    const updatedSnap = curSnap.map((s: any) =>
-      (s.reviewer_uuid === reviewer_uuid && s.role_name === role_name)
-        ? { ...s, ...newData, _key: s._key || target._key }
-        : s
-    )
-    await review.set(rid, { ...rv, reviewers_json: JSON.stringify(updatedSnap), updated_at: ts })
-  } catch (e) { /* 快照更新失败不阻塞主流程 */ }
+    await review.set(rid, reviewUpdate)
+  } catch (e: any) {
+    Logger.info(`[DCP] submitOpinion review.set failed (snapshot may be stale): ${e?.message || e}`)
+  }
   await writeAudit(rid, reviewer_uuid, '提交评审意见', role_name,
     `评审意见: ${conclusion} | 风险: ${risk_level || 'medium'}`)
 
-  // 检查是否满足决议前置条件 → 通知唯一决议人
+  // 满足决议前置条件 → 通知唯一决议人
   const notCfg2 = await getNotifyConfig()
-  if (notCfg2.enabled && notCfg2.on_all_submitted) {
-    const latestRv = await review.get(rid)
-    const latestReviewers = jsonArr((latestRv as any).reviewers_json || '[]')
-    const _rvType = (latestRv as any).review_type || 'dcp'
-    const _rule = await getResolutionRuleByType(_rvType)
-    const _pubRole = getPublisherRole(_rule)
-    if (_pubRole && latestReviewers.length > 0) {
-      // 按 submitRequirement 判断是否满足决议条件
-      const _allRoleTpls = filterRolesByType(await qAll(roleTpl), _rvType)
-      const _ready = isResolutionReady(_rule, latestReviewers, _allRoleTpls)
-      if (_ready) {
-        // 找到唯一决议人
-        const publisher = latestReviewers.find((r: any) => r.role_name === _pubRole)
-        if (publisher && publisher.reviewer_uuid) {
-          const phaseName = (latestRv as any).phase_code || ''
-          sendNotification(
-            `${_rvType.toUpperCase()}决议通知 — ${phaseName}`,
-            `「${phaseName}」评审已满足决议条件，请前往发布决议。`,
-            `${(latestRv as any).project_uuid ? `/project/${(latestRv as any).project_uuid}` : ''}`,
-            [publisher.reviewer_uuid],
-          )
-        }
-      }
+  if (_ready && notCfg2.enabled && notCfg2.on_all_submitted) {
+    const publisher = updatedSnap.find((r: any) => r.role_name === _pubRole)
+    if (publisher && publisher.reviewer_uuid) {
+      const phaseName = (rv as any).phase_code || ''
+      sendNotification(
+        `${_rvType.toUpperCase()}决议通知 — ${phaseName}`,
+        `「${phaseName}」评审已满足决议条件，请前往发布决议。`,
+        `${(rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : ''}`,
+        [publisher.reviewer_uuid],
+      )
     }
   }
 
@@ -2143,6 +2333,11 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   if (rv.status !== 'reviewing') {
     return { body: { error: '当前状态不可发布决议' }, statusCode: 400 }
   }
+  // 精确状态校验：仅 reviewing / awaiting_resolution 可发布决议
+  const effState = getEffectiveState(rv)
+  if (effState !== 'reviewing' && effState !== 'awaiting_resolution') {
+    return { body: { error: '当前状态不可发布决议' }, statusCode: 400 }
+  }
 
   // 按 review_type 获取决议规则配置
   const reviewType = (rv as any).review_type || 'dcp'
@@ -2263,9 +2458,23 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     published_by_name: publisher_name || '',
     published_at: now,
   })
-  // 更新评审状态
-  const newStatus = (normalizedFc === 'reject' || normalizedFc === 'fail' || normalizedFc === 'rework') ? 'rejected' : 'completed'
-  await review.set(rid, { ...rv, status: newStatus, updated_at: now })
+  // 根据决议结论确定目标状态
+  let targetState: string
+  let newStatus: string
+  if (normalizedFc === 'pass') {
+    targetState = 'completed'; newStatus = 'completed'
+  } else if (normalizedFc === 'conditional_pass') {
+    // 有条件通过 → 先进入 resolution_published，再进入 remediation_pending
+    targetState = 'remediation_pending'; newStatus = 'reviewing'
+  } else if (normalizedFc === 'rework') {
+    targetState = 'remediation_pending'; newStatus = 'reviewing'
+  } else {
+    // reject / fail
+    targetState = 'rejected'; newStatus = 'rejected'
+  }
+  const fcLabel = normalizedFc === 'pass' ? '通过' : normalizedFc === 'conditional_pass' ? '有条件通过' : normalizedFc === 'fail' ? '不通过' : normalizedFc === 'rework' ? '返工' : '驳回'
+  const stateFields = buildStateTransition(rv, targetState, puuid, `决议：${fcLabel}`)
+  await review.set(rid, { ...rv, ...stateFields })
   await writeAudit(rid, puuid, '发布决议', rid,
     `决议已发布: ${normalizedFc} [${snapshotNumber}]`)
 
@@ -2294,7 +2503,7 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     }
   }
 
-  return { body: { ok: true, snapshot_number: snapshotNumber, status: newStatus } }
+  return { body: { ok: true, snapshot_number: snapshotNumber, status: newStatus, review_state: targetState } }
 }
 
 // 兼容旧名
@@ -2404,6 +2613,10 @@ export async function remindReview(req: any): Promise<PluginResponse> {
 
   // 状态校验：仅评审中可催办
   if (rv.status !== 'reviewing') {
+    return { body: { error: '当前状态不可催办' }, statusCode: 400 }
+  }
+  const _remindEffState = getEffectiveState(rv)
+  if (_remindEffState !== 'reviewing' && _remindEffState !== 'awaiting_resolution' && _remindEffState !== 're_reviewing') {
     return { body: { error: '当前状态不可催办' }, statusCode: 400 }
   }
 
@@ -2631,4 +2844,153 @@ export async function listIssueTypes(req: any): Promise<PluginResponse> {
   } catch {}
 
   return { body: { issue_types: types } }
+}
+
+// ============================================================
+// 状态机 API — 手动状态流转 / 查询状态 / 查询轮次
+// ============================================================
+
+// POST /review/:review_uuid/transition — 手动触发状态流转
+export async function transitionReview(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  const b = (req.body || {}) as any
+  const { target_state, operator_uuid, reason } = b
+  if (!rid || !target_state || !operator_uuid) {
+    return { body: { error: '缺少必要字段' }, statusCode: 400 }
+  }
+  if (!REVIEW_STATES.includes(target_state as any)) {
+    return { body: { error: `无效的目标状态: ${target_state}` }, statusCode: 400 }
+  }
+
+  const rv = await review.get(rid)
+  if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
+
+  const currentState = getEffectiveState(rv)
+  if (!isValidTransition(currentState, target_state)) {
+    return { body: { error: `非法状态流转: ${currentState} → ${target_state}` }, statusCode: 400 }
+  }
+
+  // 权限校验：仅发起人可手动流转
+  if ((rv as any).creator_uuid !== operator_uuid) {
+    return { body: { error: '仅评审发起人可触发状态流转' }, statusCode: 403 }
+  }
+
+  // 进入 re_reviewing 时重置评审人提交状态（开启新轮次）
+  let extra: Record<string, any> = {}
+  if (target_state === 're_reviewing') {
+    const allReviewers = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+    const resetReviewers: any[] = []
+    for (const r of allReviewers) {
+      const reset = { ...r, conclusion: '', risk_level: 'medium', opinion_summary: '', submitted_at: 0 }
+      await rvReviewer.set(r._key, reset)
+      resetReviewers.push(reset)
+    }
+    extra.reviewers_json = JSON.stringify(resetReviewers)
+    // 重置 checklist
+    let cl = jsonArr((rv as any).checklist_json || '[]')
+    for (const item of cl) { item.status = 'unchecked'; item.checked_by = ''; item.checked_at = 0 }
+    extra.checklist_json = JSON.stringify(cl)
+  }
+
+  const stateFields = buildStateTransition(rv, target_state, operator_uuid, reason || `手动流转: ${currentState} → ${target_state}`, extra)
+  await review.set(rid, { ...rv, ...stateFields })
+  await writeAudit(rid, operator_uuid, '状态流转', target_state,
+    `${currentState} → ${target_state}${reason ? ' | ' + reason : ''}`)
+
+  return {
+    body: {
+      ok: true,
+      review_state: target_state,
+      status: stateToStatus(target_state),
+      round_no: stateFields.round_no,
+      round_state: stateToRoundState(target_state),
+      previous_state: currentState,
+    }
+  }
+}
+
+// GET /review/:review_uuid/state — 查询完整状态信息
+export async function getReviewState(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
+
+  const rv = await review.get(rid)
+  if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
+
+  const currentState = getEffectiveState(rv)
+  const history = jsonArr((rv as any).state_history_json || '[]')
+
+  // 可流转到的目标状态
+  const availableTransitions = VALID_TRANSITIONS[currentState] || []
+
+  return {
+    body: {
+      review_uuid: rid,
+      review_state: currentState,
+      status: (rv as any).status,
+      round_no: Number((rv as any).round_no || 1),
+      round_state: (rv as any).round_state || stateToRoundState(currentState),
+      state_history: history,
+      available_transitions: availableTransitions,
+    }
+  }
+}
+
+// GET /review/:review_uuid/rounds — 查询轮次信息
+export async function getReviewRounds(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
+
+  const rv = await review.get(rid)
+  if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
+
+  const history = jsonArr((rv as any).state_history_json || '[]')
+  const currentRoundNo = Number((rv as any).round_no || 1)
+
+  // 从状态历史中提取轮次信息
+  const rounds: any[] = []
+  let currentRound: any = null
+  for (const entry of history) {
+    const rno = Number(entry.round_no || 1)
+    if (!currentRound || currentRound.round_no !== rno) {
+      if (currentRound) rounds.push(currentRound)
+      currentRound = {
+        round_no: rno,
+        started_at: entry.at,
+        started_by: entry.by,
+        start_state: entry.state,
+        states: [entry],
+      }
+    } else {
+      currentRound.states.push(entry)
+      currentRound.end_state = entry.state
+      currentRound.ended_at = entry.at
+    }
+  }
+  if (currentRound) rounds.push(currentRound)
+
+  // 获取每轮的决议快照
+  const resolutions = await qAll(resolution, (v: any) => v.review_uuid === rid)
+
+  return {
+    body: {
+      review_uuid: rid,
+      current_round_no: currentRoundNo,
+      current_round_state: (rv as any).round_state || stateToRoundState(getEffectiveState(rv)),
+      total_rounds: rounds.length,
+      rounds: rounds.map((r: any) => ({
+        round_no: r.round_no,
+        started_at: r.started_at,
+        ended_at: r.ended_at || 0,
+        start_state: r.start_state,
+        end_state: r.end_state || r.start_state,
+        state_count: r.states.length,
+        resolution: resolutions.find((res: any) => {
+          // 决议时间在该轮次的开始和结束之间
+          const publishedAt = Number(res.published_at || 0)
+          return publishedAt >= r.started_at && (!r.ended_at || publishedAt <= r.ended_at)
+        }) || null,
+      })),
+    }
+  }
 }

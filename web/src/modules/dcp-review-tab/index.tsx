@@ -8,9 +8,14 @@ import { getTeamUUID, checkPermission } from '../../api'
 // ============================================================
 const STATUS_LABELS: Record<string, string> = {
   draft: '草稿', reviewing: '评审中', completed: '已完成', rejected: '已否决',
+  // 细粒度状态
+  ready: '就绪', awaiting_resolution: '待决议', resolution_published: '决议已发布',
+  remediation_pending: '整改中', re_reviewing: '复审中', canceled: '已撤回', archived: '已归档',
 }
 const STATUS_COLORS: Record<string, string> = {
   draft: '#999', reviewing: '#1677ff', completed: '#52c41a', rejected: '#ff4d4f',
+  ready: '#8c8c8c', awaiting_resolution: '#722ed1', resolution_published: '#13c2c2',
+  remediation_pending: '#fa8c16', re_reviewing: '#2f54eb', canceled: '#bfbfbf', archived: '#d9d9d9',
 }
 const MATERIAL_STATUS: Record<string, { text: string; color: string; bg: string }> = {
   pending: { text: '待提交', color: '#999', bg: '#fafafa' },
@@ -65,7 +70,7 @@ async function copyReviewLink(reviewNumber: string, reviewUuid: string): Promise
   }
 }
 
-type TabKey = 'materials' | 'indicators' | 'reviewers' | 'issues' | 'checklist' | 'resolution' | 'audit'
+type TabKey = 'materials' | 'indicators' | 'reviewers' | 'issues' | 'checklist' | 'resolution' | 'audit' | 'timeline'
 
 // ============================================================
 // 样式
@@ -351,8 +356,9 @@ const App: React.FC = () => {
           </tr></thead>
           <tbody>
             {filteredReviews.slice((page - 1) * pageSize, page * pageSize).map((r: any, i: number) => {
-              const sc = STATUS_COLORS[r.status] || '#999'
-              const sl = STATUS_LABELS[r.status] || r.status
+              const effState = r.effective_state || r.status
+              const sc = STATUS_COLORS[effState] || STATUS_COLORS[r.status] || '#999'
+              const sl = STATUS_LABELS[effState] || STATUS_LABELS[r.status] || r.status
               return (
                 <tr key={i} style={{ borderBottom: '1px solid #f0f0f0', cursor: 'pointer' }} onClick={() => loadDetail(r.review_uuid)}>
                   <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 12, color: '#1677ff', fontWeight: 600 }}>
@@ -608,9 +614,10 @@ const CreateReviewForm: React.FC<{ projectUuid: string; projectKey: string; proj
 export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; componentUuid: string; viewUuid: string; data: any; onBack: () => void; onRefresh: () => void; onStart: (rid: string) => void; onRecreate: (rid: string) => void; msg: string; setMsg: (v: string) => void }> = ({ projectUuid, projectKey, componentUuid, viewUuid, data, onBack, onRefresh, onStart, onRecreate, msg, setMsg }) => {
   const rv = data.review
   const [activeTab, setActiveTab] = useState<TabKey>('materials')
-  const sc = STATUS_COLORS[rv.status] || '#999'
-  const sl = STATUS_LABELS[rv.status] || rv.status
-  const isEditable = rv.status === 'draft'
+  const effState = rv.effective_state || rv.status
+  const sc = STATUS_COLORS[effState] || STATUS_COLORS[rv.status] || '#999'
+  const sl = STATUS_LABELS[effState] || STATUS_LABELS[rv.status] || rv.status
+  const isEditable = rv.status === 'draft' || effState === 'canceled'
   const isReviewing = rv.status === 'reviewing'
   const isDone = rv.status === 'completed' || rv.status === 'rejected'
 
@@ -621,6 +628,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     { key: 'checklist', label: 'Checklist', badge: data.checklist?.length },
     { key: 'resolution', label: '决议快照' },
     { key: 'audit', label: '审计日志' },
+    { key: 'timeline', label: '状态轨迹' },
   ]
 
   const [showPublishForm, setShowPublishForm] = useState(false)
@@ -634,6 +642,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   const [showRecallForm, setShowRecallForm] = useState(false)
   const [recallReason, setRecallReason] = useState('')
   const [recalling, setRecalling] = useState(false)
+  const [transitioning, setTransitioning] = useState(false)
   const [editingMeetingTime, setEditingMeetingTime] = useState(false)
   const [meetingTimeDraft, setMeetingTimeDraft] = useState('')
   const [savingMeetingTime, setSavingMeetingTime] = useState(false)
@@ -751,6 +760,22 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     onRecreate(rv.review_uuid)
   }
 
+  async function handleStartReReview() {
+    if (!currentUser.uuid) return
+    if (!confirm('确认开始复审？\n评审人提交状态将重置，评审人可重新提交评审意见。')) return
+    setTransitioning(true)
+    setMsg('')
+    try {
+      await api.transitionReview(rv.review_uuid, {
+        target_state: 're_reviewing',
+        operator_uuid: currentUser.uuid,
+        reason: '发起复审',
+      })
+      onRefresh()
+    } catch (e: any) { setMsg(e.message || '操作失败') }
+    finally { setTransitioning(false) }
+  }
+
   async function handlePublishResolution() {
     if (!resolutionForm.final_conclusion) { setMsg('请选择决议结果'); return }
     setPublishing(true)
@@ -813,6 +838,10 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
             {rv.status === 'rejected' && currentUser.uuid && rv.creator_uuid === currentUser.uuid && (
               <button style={{ ...S.btn(true), background: '#722ed1', borderColor: '#722ed1' }} onClick={handleRecreate}>重新发起</button>
             )}
+            {effState === 'remediation_pending' && currentUser.uuid && rv.creator_uuid === currentUser.uuid && (
+              <button style={{ ...S.btn(true), background: '#fa8c16', borderColor: '#fa8c16' }} onClick={handleStartReReview} disabled={transitioning}>{transitioning ? '处理中…' : '开始复审'}</button>
+            )}
+            {effState === 'remediation_pending' && <span style={{ marginLeft: 8, fontSize: 12, color: '#fa8c16' }}>整改中 — 完成整改后可发起复审</span>}
           </div>
         </div>
         <div style={{ fontSize: 12, color: '#666' }}>
@@ -1017,6 +1046,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       )}
       {activeTab === 'resolution' && <div style={S.tabPanel}><ResolutionPanel data={data} onRefresh={onRefresh} /></div>}
       {activeTab === 'audit' && <div style={S.tabPanel}><AuditPanel reviewUuid={rv.review_uuid} /></div>}
+      {activeTab === 'timeline' && <div style={S.tabPanel}><StateTimeline data={data} effState={effState} roundNo={rv.round_no || 1} /></div>}
       {copyToast && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', background: 'rgba(0,0,0,0.75)', color: '#fff', padding: '8px 20px', borderRadius: 6, fontSize: 13, zIndex: 9999 }}>{copyToast}</div>
       )}
@@ -2213,4 +2243,79 @@ const IPDFlowChart: React.FC<{
   )
 }
 
+// ============================================================
+// 状态轨迹时间线
+// ============================================================
+const STATE_TIMELINE_LABELS: Record<string, string> = {
+  draft: '草稿', ready: '就绪', reviewing: '评审中', awaiting_resolution: '待决议',
+  resolution_published: '决议已发布', remediation_pending: '整改中', re_reviewing: '复审中',
+  completed: '已完成', rejected: '已否决', canceled: '已撤回', archived: '已归档',
+}
+const STATE_TIMELINE_COLORS: Record<string, string> = {
+  draft: '#999', ready: '#8c8c8c', reviewing: '#1677ff', awaiting_resolution: '#722ed1',
+  resolution_published: '#13c2c2', remediation_pending: '#fa8c16', re_reviewing: '#2f54eb',
+  completed: '#52c41a', rejected: '#ff4d4f', canceled: '#bfbfbf', archived: '#d9d9d9',
+}
 
+const StateTimeline: React.FC<{ data: any; effState: string; roundNo: number }> = ({ data, effState, roundNo }) => {
+  const history: any[] = data.state_history || []
+  const available: string[] = data.available_transitions || []
+
+  return (
+    <div>
+      {/* 当前状态概览 */}
+      <div style={{ marginBottom: 16, padding: '12px 16px', background: '#f6f8fa', borderRadius: 8, border: '1px solid #e8e8e8' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, color: '#666' }}>当前状态:</span>
+          <span style={{
+            padding: '2px 10px', borderRadius: 4, fontSize: 13, fontWeight: 600,
+            color: '#fff', background: STATE_TIMELINE_COLORS[effState] || '#999',
+          }}>{STATE_TIMELINE_LABELS[effState] || effState}</span>
+          <span style={{ fontSize: 13, color: '#666' }}>| 第 {roundNo} 轮</span>
+          {available.length > 0 && (
+            <span style={{ fontSize: 12, color: '#999' }}>可流转至: {available.map(s => STATE_TIMELINE_LABELS[s] || s).join(' / ')}</span>
+          )}
+        </div>
+      </div>
+
+      {/* 状态历史时间线 */}
+      <div style={{ fontSize: 13 }}>
+        <div style={{ fontWeight: 600, marginBottom: 12, color: '#333' }}>状态变更轨迹</div>
+        {history.length === 0 ? (
+          <div style={{ color: '#999', padding: '20px 0', textAlign: 'center' }}>暂无状态记录</div>
+        ) : (
+          <div style={{ position: 'relative', paddingLeft: 20 }}>
+            {/* 竖线 */}
+            <div style={{ position: 'absolute', left: 6, top: 4, bottom: 4, width: 2, background: '#e8e8e8' }} />
+            {[...history].reverse().map((entry: any, i: number) => {
+              const isLatest = i === 0
+              const color = STATE_TIMELINE_COLORS[entry.state] || '#999'
+              const label = STATE_TIMELINE_LABELS[entry.state] || entry.state
+              const fromLabel = entry.from_state ? (STATE_TIMELINE_LABELS[entry.from_state] || entry.from_state) : ''
+              return (
+                <div key={i} style={{ position: 'relative', marginBottom: 16, paddingLeft: 16 }}>
+                  {/* 圆点 */}
+                  <div style={{
+                    position: 'absolute', left: -17, top: 4, width: 10, height: 10, borderRadius: '50%',
+                    background: color, border: '2px solid #fff', boxShadow: '0 0 0 1px ' + color,
+                  }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 600, color: isLatest ? color : '#333' }}>{label}</span>
+                    {fromLabel && <span style={{ fontSize: 11, color: '#999' }}>← {fromLabel}</span>}
+                    {entry.round_no > 1 && <span style={{ fontSize: 11, color: '#722ed1', background: '#f9f0ff', padding: '1px 6px', borderRadius: 3 }}>第{entry.round_no}轮</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#999', marginTop: 2 }}>
+                    {entry.at ? new Date(entry.at).toLocaleString('zh-CN') : '-'}
+                    {entry.by && entry.by !== 'system' && <span> | 操作人: {entry.by.substring(0, 8)}</span>}
+                    {entry.by === 'system' && <span> | 系统</span>}
+                  </div>
+                  {entry.reason && <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>{entry.reason}</div>}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

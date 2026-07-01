@@ -73,6 +73,10 @@ declare var ONESEntities: {
             reviewers_json?: string;
             checklist_json?: string;
             review_type?: string;
+            review_state?: string;
+            round_no?: number;
+            round_state?: string;
+            state_history_json?: string;
         };
         indexes: null;
     };

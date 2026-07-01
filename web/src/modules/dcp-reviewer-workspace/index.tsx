@@ -472,6 +472,8 @@ const ReviewerWorkspace: React.FC<{
  opinion_summary: myReviewer?.opinion_summary || '',
  })
  const [opinionMsg, setOpinionMsg] = useState('')
+ const [submittingOpinion, setSubmittingOpinion] = useState(false)
+ const [opinionToast, setOpinionToast] = useState('')
  const [resolutionForm, setResolutionForm] = useState({ final_conclusion: 'pass', condition_notes: '' })
  const [resolving, setResolving] = useState(false)
  const [resolutionMsg, setResolutionMsg] = useState('')
@@ -718,10 +720,14 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  setOpinionMsg('结论为「有条件通过」或「不通过」时，必须填写评审意见'); return
  }
  setOpinionMsg('')
+ setSubmittingOpinion(true)
  try {
  await callApi(`/dcp/review/${rv.review_uuid}/opinion`, 'POST', opinionForm)
+ setOpinionToast('评审意见已提交')
+ setTimeout(() => setOpinionToast(''), 3000)
  onRefresh()
  } catch (e: any) { setOpinionMsg(e.message) }
+ finally { setSubmittingOpinion(false) }
  }
 
  async function handlePublishResolution() {
@@ -1048,10 +1054,11 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  </div>
  </div>
  <div style={{ ...S.formGroup, marginTop: 8 }}>
- <label style={S.label}>意见摘要</label>
- <textarea style={S.textarea} rows={4} value={opinionForm.opinion_summary} onChange={e => setOpinionForm({ ...opinionForm, opinion_summary: e.target.value })} placeholder="输入评审意见摘要…" />
+   <label style={S.label}>意见摘要</label>
+   <textarea style={S.textarea} rows={4} value={opinionForm.opinion_summary} onChange={e => setOpinionForm({ ...opinionForm, opinion_summary: e.target.value })} placeholder="输入评审意见摘要…" />
  </div>
- <button style={{ ...S.btn(true), marginTop: 8 }} onClick={submitOpinion}>提交评审意见</button>
+ {opinionToast && <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#f6ffed', color: '#52c41a', border: '1px solid #b7eb8f' }}>{opinionToast}</div>}
+ <button style={{ ...S.btn(true), marginTop: 8 }} onClick={submitOpinion} disabled={submittingOpinion}>{submittingOpinion ? '提交中…' : '提交评审意见'}</button>
  </>
  )}
 </div>
@@ -1087,16 +1094,17 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  <div style={{ padding: '6px 10px', background: '#fafafa', borderRadius: 4, fontSize: 13, border: '1px solid #e8e8e8', whiteSpace: 'pre-wrap' }}>{res.condition_notes}</div>
  </div>
  )}
- {votes.length > 0 && (
+ {/* 决议模式下也展示评审人意见汇总（实时数据，非快照） */}
+ {(isResolutionMode || votes.length > 0) && (
  <div>
- <label style={S.label}>评审意见汇总（投票快照）</label>
+ <label style={S.label}>{votes.length > 0 ? '评审意见汇总（投票快照）' : '评审意见汇总'}</label>
  <div style={S.tableWrap}>
  <table style={S.table}>
  <thead><tr>
  <th style={S.th}>角色</th><th style={S.th}>投票</th><th style={S.th}>风险</th><th style={S.th}>意见</th>
  </tr></thead>
  <tbody>
- {votes.map((v: any, i: number) => (
+ {(votes.length > 0 ? votes : reviewers).map((v: any, i: number) => (
  <tr key={i}>
  <td style={S.td}>{v.role_name}</td>
  <td style={S.td}>
@@ -1244,7 +1252,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  )
  }
 
- // 非发布人或无决议需要：显示进度
+ // 非发布人或无决议需要：显示进度 + 评审人意见汇总
  return (
  <div style={{ ...S.card }}>
  <h4 style={S.sectionTitle}>决议状态</h4>
@@ -1267,8 +1275,35 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
      ? `评审进度: ${done}/${reviewers.length} 已提交（全部提交后即可发布决议）`
      : `评审进度: ${done}/${reviewers.length} 已提交（全部提交后由决议发布人发布决议）`
  })()}
- </div>
- </div>
+</div>
+{/* 决议模式下展示评审人意见汇总 */}
+{isResolutionMode && reviewers.length > 0 && (
+  <div style={{ marginTop: 12 }}>
+    <label style={S.label}>评审意见汇总</label>
+    <div style={S.tableWrap}>
+    <table style={S.table}>
+    <thead><tr>
+    <th style={S.th}>角色</th><th style={S.th}>投票</th><th style={S.th}>风险</th><th style={S.th}>意见</th>
+    </tr></thead>
+    <tbody>
+    {reviewers.map((v: any, i: number) => (
+    <tr key={i}>
+    <td style={S.td}>{v.role_name}</td>
+    <td style={S.td}>
+    <span style={{ color: v.conclusion === 'pass' ? '#52c41a' : v.conclusion === 'conditional_pass' ? '#faad14' : '#ff4d4f' }}>
+    {v.conclusion === 'pass' ? '✅ 通过' : v.conclusion === 'conditional_pass' ? '⚠️ 有条件通过' : v.submitted_at > 0 ? '❌ 不通过' : '— 未投票'}
+    </span>
+    </td>
+    <td style={S.td}>{v.risk_level === 'low' ? '低' : v.risk_level === 'high' ? '高' : '中'}</td>
+    <td style={{ ...S.td, fontSize: 12, color: '#666', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.opinion_summary || '-'}</td>
+    </tr>
+    ))}
+    </tbody>
+    </table>
+    </div>
+  </div>
+)}
+</div>
  )
  })()}
 
