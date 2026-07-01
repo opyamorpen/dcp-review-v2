@@ -1420,8 +1420,8 @@ export async function startReview(req: any): Promise<PluginResponse> {
 
   // 校验 1：所有 must_vote 或 has_veto 角色都已指定评审人
   const snapReviewers = jsonArr((rv as any).reviewers_json || '[]')
-  const reviewers = snapReviewers.length > 0 ? snapReviewers
-    : await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+  const entityReviewersStart = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+  const reviewers = entityReviewersStart.length > 0 ? entityReviewersStart : snapReviewers
   if (reviewers.length === 0) {
     return { body: { error: '请先添加评审人' }, statusCode: 400 }
   }
@@ -2357,10 +2357,12 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     return { body: { error: `当前评审类型（${reviewType.toUpperCase()}）不支持该决议结果：${normalizedFc}` }, statusCode: 400 }
   }
 
-  // 读取评审人（优先快照）
+  // 读取评审人（优先实体查询，兜底快照）
   const snap = jsonArr((rv as any).reviewers_json || '[]')
-  let allRvrs = snap.length > 0 ? snap
-    : await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+  let allRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+  if (allRvrs.length === 0) {
+    allRvrs = snap
+  }
   if (allRvrs.length === 0) {
     return { body: { error: '未找到评审人记录' }, statusCode: 400 }
   }
@@ -2642,10 +2644,10 @@ export async function remindReview(req: any): Promise<PluginResponse> {
     return { body: { error: '催办过于频繁，请稍后再试' }, statusCode: 429 }
   }
 
-  // 读取评审人（优先快照）
+  // 读取评审人（优先实体查询，兜底快照）
   const snapReviewers = jsonArr((rv as any).reviewers_json || '[]')
-  const reviewers = snapReviewers.length > 0 ? snapReviewers
-    : await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+  const entityReviewers = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+  const reviewers = entityReviewers.length > 0 ? entityReviewers : snapReviewers
   if (reviewers.length === 0) {
     return { body: { error: '暂无需要催办的评审人' }, statusCode: 400 }
   }
