@@ -3176,21 +3176,24 @@ export async function onIssueStatusChanged(payload: any) {
       const allDone = allRemediation.every((v: any) => v.issue_status === 'done')
 
       if (allDone) {
-        // 通知决议人
+        // 通知决议人 + 评审发起人
         const rv = await review.get(rid)
         if (rv) {
           const resolutions = await qAll(resolution, (v: any) => v.review_uuid === rid)
-          const publisherUUID = resolutions[0]?.published_by || (rv as any).creator_uuid || ''
+          const publisherUUID = resolutions[0]?.published_by || ''
+          const creatorUUID = (rv as any).creator_uuid || ''
+          // 合并通知对象（去重）
+          const notifyTargets = [...new Set([publisherUUID, creatorUUID].filter(Boolean))] as string[]
 
           const notCfg = await getNotifyConfig()
-          if (notCfg.enabled) {
+          if (notCfg.enabled && notifyTargets.length > 0) {
             const phaseName = (rv as any).phase_code || ''
             const title = (rv as any).review_title || phaseName
             sendNotification(
               `${((rv as any).review_type || 'dcp').toUpperCase()}评审整改完成 — ${phaseName}`,
               `「${title}」的 ${allRemediation.length} 个整改项已全部完成，请确认。`,
               (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
-              [publisherUUID],
+              notifyTargets,
             )
           }
         }
