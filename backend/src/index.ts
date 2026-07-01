@@ -1117,7 +1117,7 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
       linked_issues: issues,
       remediation_issues: remediationIssues,
       remediation_all_done: remediationAllDone,
-      resolution: resList[0] || null,
+      resolution: resList.find((r: any) => (r.round_no || 1) === _currentRoundNo) || null,
       resolutions: resList.sort((a: any, b: any) => (a.round_no || 1) - (b.round_no || 1)),
       supplements: supps.sort((a: any, b: any) => (b.submitted_at || 0) - (a.submitted_at || 0)),
       checklist: jsonArr((rv as any).checklist_json || '[]'),
@@ -1348,7 +1348,8 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
     const myRoundNo = (my as any).round_no || 1
     const mySubmittedCurrentRound = my.submitted_at > 0 && myRoundNo === reviewRoundNo
     const issues = await qAll(linkedIssue, (v: any) => v.review_uuid === r.review_uuid)
-    const hasResolution = (await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)).length > 0
+    const allResolutions = await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)
+    const hasResolution = allResolutions.some((res: any) => (res.round_no || 1) === reviewRoundNo)
     const rvType = (r as any).review_type || 'dcp'
     const rule = resRules[rvType] || {}
     const publisherRole = getPublisherRole(rule)
@@ -2378,9 +2379,9 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   if (rv.status !== 'reviewing') {
     return { body: { error: '当前状态不可发布决议' }, statusCode: 400 }
   }
-  // 精确状态校验：仅 reviewing / awaiting_resolution 可发布决议
+  // 精确状态校验：reviewing / re_reviewing / awaiting_resolution 可发布决议
   const effState = getEffectiveState(rv)
-  if (effState !== 'reviewing' && effState !== 'awaiting_resolution') {
+  if (effState !== 'reviewing' && effState !== 'awaiting_resolution' && effState !== 're_reviewing') {
     return { body: { error: '当前状态不可发布决议' }, statusCode: 400 }
   }
 

@@ -240,6 +240,7 @@ const App: React.FC = () => {
 
  if (selected) {
  return <ReviewerWorkspace
+ key={`${selected.review.review_uuid}_${selected.review.round_no || 1}`}
  data={selected}
  currentUser={currentUser}
  directLink={directLink}
@@ -462,14 +463,15 @@ const ReviewerWorkspace: React.FC<{
  // 自动匹配当前用户的评审角色
  const myReviewer = reviewers.find((r: any) => r.reviewer_uuid === currentUser.uuid)
  const myRole = myReviewer?.role_name || ''
- const alreadySubmitted = !!(myReviewer?.submitted_at > 0)
+ const _wsRoundNo = rv.round_no || 1
+ const alreadySubmitted = !!(myReviewer?.submitted_at > 0 && (myReviewer?.round_no || 1) === _wsRoundNo)
 
  const [opinionForm, setOpinionForm] = useState({
  reviewer_uuid: currentUser.uuid || '',
  role_name: myRole,
- conclusion: myReviewer?.conclusion || '',
- risk_level: myReviewer?.risk_level || 'medium',
- opinion_summary: myReviewer?.opinion_summary || '',
+ conclusion: alreadySubmitted ? (myReviewer?.conclusion || '') : '',
+ risk_level: alreadySubmitted ? (myReviewer?.risk_level || 'medium') : 'medium',
+ opinion_summary: alreadySubmitted ? (myReviewer?.opinion_summary || '') : '',
  })
  const [opinionMsg, setOpinionMsg] = useState('')
  const [submittingOpinion, setSubmittingOpinion] = useState(false)
@@ -535,6 +537,9 @@ const resolutionReady = (() => {
 })()
 
 const isResolutionMode = mode === 'resolution'
+const _wsEffState = rv.effective_state || rv.review_state || rv.status
+const _isReReviewing = _wsEffState === 're_reviewing'
+const _prevResolution = (data.resolutions || []).find((r: any) => (r.round_no || 1) === _wsRoundNo - 1)
 const canPublishResolution = canPublish && rv.status === 'reviewing' && resolutionReady && !data.resolution
 
  // 复制编号到剪贴板
@@ -1008,6 +1013,11 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  {!isResolutionMode && (
  <div style={{ ...S.card, background: alreadySubmitted ? '#f6ffed' : '#f0f5ff', borderLeft: `4px solid ${alreadySubmitted ? '#52c41a' : '#1677ff'}` }}>
  <h4 style={S.sectionTitle}>{alreadySubmitted ? '评审意见（已提交）' : '我的评审意见'}</h4>
+ {_isReReviewing && !alreadySubmitted && (
+   <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#e6f4ff', color: '#1677ff', border: '1px solid #91caff' }}>
+     第 {_wsRoundNo} 轮复审{_prevResolution ? `（上一轮决议：${_prevResolution.final_conclusion === 'conditional_pass' ? '有条件通过' : _prevResolution.final_conclusion === 'rework' ? '返工' : _prevResolution.final_conclusion}）` : ''}。整改项已完成，请重新评估并提交评审意见。
+   </div>
+ )}
  {opinionMsg && <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#cf1322' }}>{opinionMsg}</div>}
  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
  <div style={S.formGroup}>
@@ -1211,6 +1221,11 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  </div>
  )
  })()}
+ {_isReReviewing && (
+   <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#e6f4ff', color: '#1677ff', border: '1px solid #91caff' }}>
+     第 {_wsRoundNo} 轮复审{_prevResolution ? `（上一轮决议：${_prevResolution.final_conclusion === 'conditional_pass' ? '有条件通过' : _prevResolution.final_conclusion === 'rework' ? '返工' : _prevResolution.final_conclusion}）` : ''}。请综合复审意见发布新决议。
+   </div>
+ )}
  {resolutionMsg && <div style={{ marginBottom: 10, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#cf1322' }}>{resolutionMsg}</div>}
  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
  <div style={S.formGroup}>

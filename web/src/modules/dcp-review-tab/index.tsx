@@ -977,6 +977,16 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
           )}
         </div>
       </div>
+      {/* 复审提示横幅 */}
+      {effState === 're_reviewing' && (() => {
+        const _rNo = rv.round_no || 1
+        const _prevRes = (data.resolutions || []).find((r: any) => (r.round_no || 1) === _rNo - 1)
+        return (
+          <div style={{ marginBottom: 12, padding: '10px 16px', borderRadius: 6, fontSize: 13, background: '#e6f4ff', color: '#1677ff', border: '1px solid #91caff' }}>
+            第 {_rNo} 轮复审{_prevRes ? `（上一轮决议：${_prevRes.final_conclusion === 'conditional_pass' ? '有条件通过' : _prevRes.final_conclusion === 'rework' ? '返工' : _prevRes.final_conclusion}）` : ''}。整改项已完成，评审人需重新提交评审意见，决议人需重新发布决议。
+          </div>
+        )
+      })()}
       {/* 撤回评审表单 */}
       {showRecallForm && (
         <div style={{ ...S.card, marginBottom: 16, background: '#fff7e6', borderLeft: '4px solid #faad14' }}>
@@ -1767,6 +1777,33 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
           </div>
         )}
       </div>
+      {/* 历史决议（多轮） */}
+      {(data.resolutions || []).length > 1 && (() => {
+        const _rNo = data.review?.round_no || 1
+        const prevResolutions = (data.resolutions || []).filter((r: any) => (r.round_no || 1) < _rNo)
+        if (prevResolutions.length === 0) return null
+        return (
+          <div style={{ marginBottom: 16 }}>
+            <h4 style={S.sectionTitle}>历史决议（{prevResolutions.length}轮）</h4>
+            {prevResolutions.map((pr: any, i: number) => {
+              const prVotes: any[] = pr.based_on_votes ? (() => { try { return JSON.parse(pr.based_on_votes) } catch { return [] } })() : []
+              return (
+                <div key={i} style={{ ...S.card, borderLeft: '3px solid #bfbfbf', background: '#fafafa', marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
+                    第{pr.round_no || 1}轮 | 快照: <code>{pr.snapshot_number}</code> | {pr.published_at ? new Date(pr.published_at).toLocaleString('zh-CN') : '-'}
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>
+                    决议: <span style={{ color: pr.final_conclusion === 'pass' ? '#52c41a' : pr.final_conclusion === 'conditional_pass' ? '#faad14' : '#ff4d4f' }}>
+                      {pr.final_conclusion === 'pass' ? '✅ 通过' : pr.final_conclusion === 'conditional_pass' ? '⚠️ 有条件通过' : pr.final_conclusion === 'rework' ? '🔧 返工' : '❌ 驳回'}
+                    </span>
+                  </div>
+                  {pr.condition_notes && <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: '#666', marginTop: 4 }}>{pr.condition_notes}</div>}
+                </div>
+              )
+            })}
+          </div>
+        )
+      })()}
       {/* 补充/纠偏说明 */}
       {supps.length > 0 && (
         <div style={{ marginBottom: 16 }}>
