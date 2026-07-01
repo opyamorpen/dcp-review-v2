@@ -2,7 +2,7 @@ service:
   app_id: 709xehle
   name: DCP评审中心
   description: 团队级DCP/TR评审插件。支持项目内发起DCP阶段决策评审和TR技术评审、多人异步评审、关联工作项、不可覆盖决议快照和审计追溯。
-  version: 1.18.4
+  version: 1.19.0
   mode: org
   logo: null
   language: nodejs
@@ -80,6 +80,24 @@ abilities:
     abilityType: SidebarMenu
     relateModule:
       systemMenu: dcp-sidebar
+  - id: dcp-task-event-handler
+    name: 整改工作项锁定
+    version: 1.0.0
+    abilityType: TaskEventHandler
+    function:
+      taskPreActionFunc: taskPreAction
+      taskActionDoneFunc: taskActionDone
+    config:
+      - fieldType: Input
+        key: issueTypeScope
+        show: true
+        label: '工作项类型（留空=全部）'
+        value: ''
+      - fieldType: Input
+        key: field
+        show: true
+        label: '工作项属性（留空=全部）'
+        value: ''
 apis:
   - type: external
     methods:
@@ -266,6 +284,24 @@ apis:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid/rounds
     function: getReviewRounds
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/review/:review_uuid/remediation
+    function: getRemediationIssues
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/remediation/refresh
+    function: refreshRemediationStatus
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/remediation/confirm
+    function: confirmRemediation
+events:
+  - eventType: ones:project:issue-status:changed
+    function: onIssueStatusChanged
 storage:
   entities:
     - name: dcp_base_config
@@ -499,6 +535,10 @@ storage:
           type: integer
           length: 16
           default: 0
+        round_no:
+          type: integer
+          length: 4
+          default: 1
     - name: dcp_review_indicator
       attributes:
         review_uuid:
@@ -559,6 +599,10 @@ storage:
           type: integer
           length: 16
           default: 0
+        round_no:
+          type: integer
+          length: 4
+          default: 1
     - name: dcp_linked_issue
       attributes:
         review_uuid:
@@ -597,6 +641,26 @@ storage:
           type: integer
           length: 16
           default: 0
+        link_type:
+          type: text
+          length: 32
+          default: general
+        round_no:
+          type: integer
+          length: 4
+          default: 1
+        locked:
+          type: text
+          length: 16
+          default: ''
+        locked_at:
+          type: integer
+          length: 16
+          default: 0
+        locked_by:
+          type: text
+          length: 64
+          default: ''
     - name: dcp_resolution
       attributes:
         review_uuid:
@@ -647,6 +711,10 @@ storage:
           type: integer
           length: 16
           default: 0
+        round_no:
+          type: integer
+          length: 4
+          default: 1
     - name: dcp_supplement
       attributes:
         review_uuid:

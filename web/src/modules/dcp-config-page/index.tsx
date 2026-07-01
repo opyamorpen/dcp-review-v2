@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import ReactDOM from 'react-dom'
 import { apiGet, apiPost, DcpApiError } from '../../api'
 
-type NavKey = 'phases' | 'materials' | 'indicators' | 'roles' | 'checklist' | 'resolution' | 'notify' | 'ipdflow' | 'recall'
+type NavKey = 'phases' | 'materials' | 'indicators' | 'roles' | 'checklist' | 'resolution' | 'notify' | 'ipdflow' | 'recall' | 'remediation'
 
 const NAV: { key: NavKey; label: string }[] = [
  { key: 'phases', label: '节点模板' },
@@ -14,6 +14,7 @@ const NAV: { key: NavKey; label: string }[] = [
  { key: 'ipdflow', label: 'IPD流程图' },
  { key: 'notify', label: '通知设置' },
  { key: 'recall', label: '撤回设置' },
+ { key: 'remediation', label: '整改设置' },
 ]
 
 function jsonArr(s: string): string[] {
@@ -61,6 +62,7 @@ const App: React.FC = () => {
  const [ipdFlowLayout, setIpdFlowLayout] = useState<any>(null)
  const [resolutionRules, setResolutionRules] = useState<any>({ dcp: null, tr: null })
  const [recallConfig, setRecallConfig] = useState<any>({ enabled: false, allowedBeforeResolution: true, requireReason: true, clearSubmittedOpinions: true })
+ const [remediationIssueType, setRemediationIssueType] = useState('任务')
 
  useEffect(() => { loadConfig() }, [])
 
@@ -86,6 +88,7 @@ const App: React.FC = () => {
  if (data.checklistItems?.length) setChecklistItems(data.checklistItems.map((c: any) => ({ ...c, review_type: c.review_type || 'dcp' })))
  if (data.notify_config) setNotifyConfig(data.notify_config)
  if (data.review_recall_config) setRecallConfig(data.review_recall_config)
+ if (data.config?.remediation_issue_type) setRemediationIssueType(data.config.remediation_issue_type)
  if (data.ipd_flow_layout) setIpdFlowLayout(data.ipd_flow_layout)
  if (data.resolution_rule_config) setResolutionRules(data.resolution_rule_config)
  } catch (err: any) { setMessage('加载失败: ' + err.message) }
@@ -106,6 +109,7 @@ const App: React.FC = () => {
  review_recall_config: recallConfig,
  ipd_flow_layout: ipdFlowLayout,
  resolution_rule_config: resolutionRules,
+ config: { remediation_issue_type: remediationIssueType },
  }
  const res = await apiPost('/dcp/config', body)
  if (res.error) { setMessage('保存失败: ' + res.error) }
@@ -151,6 +155,7 @@ const App: React.FC = () => {
  {nav === 'ipdflow' && <IpdFlowLayoutConfig layout={ipdFlowLayout} phases={phases} onChange={setIpdFlowLayout} editing={editing} />}
  {nav === 'notify' && <NotifySettings config={notifyConfig} onChange={setNotifyConfig} editing={editing} />}
  {nav === 'recall' && <RecallSettings config={recallConfig} onChange={setRecallConfig} editing={editing} />}
+ {nav === 'remediation' && <RemediationSettings issueType={remediationIssueType} onChange={setRemediationIssueType} editing={editing} />}
  </div>
  {editing && (
  <div style={S.saveBar}>
@@ -627,6 +632,30 @@ const RecallSettings: React.FC<{ config: any; onChange: (c: any) => void; editin
    <div style={{ padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#fff7e6', color: '#faad14' }}>
      ⚠ 撤回后评审单回到草稿状态，已提交的评审意见、Checklist 状态将被清空，评审人待办和决议待办将失效。
    </div>
+ </div>
+ )
+}
+
+// ============================================================
+// 整改设置
+// ============================================================
+const RemediationSettings: React.FC<{ issueType: string; onChange: (v: string) => void; editing: boolean }> = ({ issueType, onChange, editing }) => {
+ return (
+ <div>
+ <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 16 }}>整改设置 {editing ? '— 编辑中' : '— 只读'}</div>
+ {!editing && <div style={{ marginBottom: 16, color: '#999', fontSize: 12 }}>点击右上角「配置」进入编辑模式后可修改</div>}
+
+ <div style={{ marginBottom: 20, padding: 12, background: '#f9f9f9', borderRadius: 8 }}>
+ <label style={{ display: 'block', fontWeight: 600, fontSize: 14, marginBottom: 8 }}>整改工作项默认类型</label>
+ <div style={{ color: '#999', fontSize: 12, marginBottom: 8 }}>
+   评审决议为「有条件通过」或「返工」后，在整改项区域创建整改工作项时，默认使用此类型。留空则不预填。
+ </div>
+ <input style={S.input} value={issueType} onChange={e => onChange(e.target.value)} placeholder="如：任务" disabled={!editing} />
+ </div>
+
+ <div style={{ padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#e6f4ff', color: '#1677ff' }}>
+   配置后，评审详情页整改区域创建工作项时将自动预填此类型且不可更改。
+ </div>
  </div>
  )
 }

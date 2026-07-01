@@ -763,7 +763,7 @@ function buildStateTransition(rv: any, newState: string, by: string, reason: str
 // 配置
 // ============================================================
 export async function getPluginConfig(_req: any): Promise<PluginResponse> {
-  const keys = ['default_resolution_template']
+  const keys = ['default_resolution_template', 'remediation_issue_type']
   const config: any = {}
   for (const k of keys) {
     const v = await baseCfg.get(k)
@@ -1105,13 +1105,20 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
     }))
     Logger.info(`[DCP] getReviewDetail building response`)
     const _rvEffState = getEffectiveState(rv)
+    const _currentRoundNo = (rv as any).round_no || 1
+    // 整改关联工作项
+    const remediationIssues = issues.filter((v: any) => v.link_type === 'remediation')
+    const remediationAllDone = remediationIssues.length > 0 && remediationIssues.every((v: any) => v.issue_status === 'done')
     return { body: {
-      review: { ...rvWithPhase, effective_state: _rvEffState },
+      review: { ...rvWithPhase, effective_state: _rvEffState, round_no: _currentRoundNo },
       materials: matsWithTpl,
       indicators: indsWithTpl,
       reviewers,
       linked_issues: issues,
+      remediation_issues: remediationIssues,
+      remediation_all_done: remediationAllDone,
       resolution: resList[0] || null,
+      resolutions: resList.sort((a: any, b: any) => (a.round_no || 1) - (b.round_no || 1)),
       supplements: supps.sort((a: any, b: any) => (b.submitted_at || 0) - (a.submitted_at || 0)),
       checklist: jsonArr((rv as any).checklist_json || '[]'),
       state_history: jsonArr((rv as any).state_history_json || '[]'),
@@ -1674,8 +1681,15 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
   }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
-  if (rv.status === 'completed' || rv.status === 'rejected') {
-    return { body: { error: '评审已结束，不可上传文件' }, statusCode: 403 }
+  // 材料权限：仅 reviewing（第1轮）或 remediation_pending（整改轮）可上传
+  const effState = getEffectiveState(rv)
+  const currentRoundNo = (rv as any).round_no || 1
+  const canUpload =
+    (effState === 'reviewing' && currentRoundNo === 1) ||
+    effState === 'remediation_pending' ||
+    effState === 'draft'
+  if (!canUpload) {
+    return { body: { error: '当前状态下不可修改材料' }, statusCode: 403 }
   }
   const key = `${rid}_mat_${template_id}`
   const ex = (await matItem.get(key)) as any
@@ -1687,6 +1701,7 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
     updated_by: b.updated_by || '', updated_at: Date.now(),
     file_name, file_data: object_key || ex.file_data || '', file_size: b.file_size || 0,
     uploaded_at: Date.now(),
+    round_no: currentRoundNo,
   })
   await writeAudit(rid, b.operator_uuid || b.updated_by || '', '上传材料', template_id,
     `上传材料文件: ${file_name}`)
@@ -1705,8 +1720,15 @@ export async function removeMaterialFile(req: any): Promise<PluginResponse> {
   }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
-  if (rv.status !== 'draft') {
-    return { body: { error: '仅草稿状态可清除文件' }, statusCode: 403 }
+  // 材料删除：仅 draft / reviewing（第1轮）/ remediation_pending 可操作
+  const effState = getEffectiveState(rv)
+  const currentRoundNo = (rv as any).round_no || 1
+  const canRemove =
+    effState === 'draft' ||
+    (effState === 'reviewing' && currentRoundNo === 1) ||
+    effState === 'remediation_pending'
+  if (!canRemove) {
+    return { body: { error: '当前状态下不可清除文件' }, statusCode: 403 }
   }
   const key = `${rid}_mat_${template_id}`
   const ex = (await matItem.get(key)) as any
@@ -2059,20 +2081,25 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
     return { body: { error: '当前状态不可提交评审意见' }, statusCode: 400 }
   }
   // 优先从实体查询评审人，兜底从 reviewers_json 快照读取
+  const currentRoundNo = (rv as any).round_no || 1
   let all = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
   if (all.length === 0) {
     const snap = jsonArr((rv as any).reviewers_json || '[]')
     all = snap.map((s: any) => s._key ? s : { ...s, _key: `${rid}_snap_${Math.random().toString(36).slice(2, 6)}` })
   }
-  const target = all.find((r: any) => r.reviewer_uuid === reviewer_uuid && r.role_name === role_name)
-  if (!target) return { body: { error: '未找到该评审人记录' }, statusCode: 404 }
-  if (target.submitted_at > 0) return { body: { error: '该评审人已提交过意见' }, statusCode: 409 }
+  // 按当前轮次过滤：只看当前轮次的评审人记录
+  const target = all.find((r: any) =>
+    r.reviewer_uuid === reviewer_uuid && r.role_name === role_name &&
+    ((r.round_no || 1) === currentRoundNo))
+  if (!target) return { body: { error: '未找到该评审人在当前轮次的记录' }, statusCode: 404 }
+  if (target.submitted_at > 0) return { body: { error: '该评审人在当前轮次已提交过意见' }, statusCode: 409 }
   const ts = Date.now()
   const newData = {
     review_uuid: rid, reviewer_uuid, role_name,
     conclusion, risk_level: risk_level || 'medium',
     opinion_summary: opinion_summary || '',
     submitted_at: ts,
+    round_no: currentRoundNo,
   }
   await rvReviewer.set(target._key, newData)
   // 同步更新 reviewers_json 快照，确保 qAll 回退路径读到最新数据
@@ -2136,6 +2163,7 @@ export async function linkIssue(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
   const { issue_uuid, issue_number, issue_title, issue_type, issue_status, linked_by } = b
+  const linkType = b.link_type || 'general'
   if (!rid || !issue_uuid) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
   }
@@ -2145,15 +2173,18 @@ export async function linkIssue(req: any): Promise<PluginResponse> {
   if (existing.length > 0) {
     return { body: { error: '该工作项已关联' }, statusCode: 409 }
   }
+  const rv = await review.get(rid)
+  const currentRoundNo = rv ? ((rv as any).round_no || 1) : 1
   const key = `${rid}_li_${issue_uuid}`
   await linkedIssue.set(key, {
     review_uuid: rid, issue_uuid,
     issue_number: issue_number || '', issue_title: issue_title || '',
     issue_type: issue_type || '', issue_status: issue_status || '',
     linked_by: linked_by || '', linked_by_name: (b as any).linked_by_name || '', linked_at: Date.now(),
+    link_type: linkType, round_no: currentRoundNo,
   })
-  await writeAudit(rid, linked_by || '', '关联工作项', issue_uuid,
-    `关联工作项: ${issue_number || issue_uuid}`)
+  await writeAudit(rid, linked_by || '', linkType === 'remediation' ? '关联整改工作项' : '关联工作项', issue_uuid,
+    `${linkType === 'remediation' ? '关联整改工作项' : '关联工作项'}: ${issue_number || issue_uuid}`)
   return { body: { ok: true } }
 }
 
@@ -2433,17 +2464,25 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     return { body: { error: passResult.error }, statusCode: 400 }
   }
 
-  // 不可覆盖
-  const existing = await qAll(resolution, (v: any) => v.review_uuid === rid)
+  // 按当前轮次判断是否已有决议（支持多轮决议）
+  const currentRoundNo = (rv as any).round_no || 1
+  const existing = await qAll(resolution,
+    (v: any) => v.review_uuid === rid && (v.round_no || 1) === currentRoundNo)
   if (existing.length > 0) {
-    return { body: { error: '决议已发布，不可覆盖' }, statusCode: 409 }
+    return { body: { error: `第${currentRoundNo}轮决议已发布，不可覆盖` }, statusCode: 409 }
   }
 
   const now = Date.now()
-  const snapshotNumber = `DCP-RES-${now.toString(36).toUpperCase()}`
+  const snapshotNumber = `DCP-RES-R${currentRoundNo}-${now.toString(36).toUpperCase()}`
 
-  // 决议实体
-  await resolution.set(rid, {
+  // conditional_pass / rework 必须填写条件说明
+  if ((normalizedFc === 'conditional_pass' || normalizedFc === 'rework') && !cn.trim()) {
+    return { body: { error: '有条件通过/返工必须填写条件说明' }, statusCode: 400 }
+  }
+
+  // 决议实体 — 多轮使用轮次相关 key
+  const resKey = currentRoundNo > 1 ? `${rid}_r${currentRoundNo}` : rid
+  await resolution.set(resKey, {
     review_uuid: rid,
     final_conclusion: normalizedFc,
     condition_notes: cn,
@@ -2459,6 +2498,7 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     published_by: puuid,
     published_by_name: publisher_name || '',
     published_at: now,
+    round_no: currentRoundNo,
   })
   // 根据决议结论确定目标状态
   let targetState: string
@@ -2996,4 +3036,295 @@ export async function getReviewRounds(req: any): Promise<PluginResponse> {
       })),
     }
   }
+}
+
+// ============================================================
+// 事件处理 — 工作项状态变更（整改闭环被动通知）
+// ============================================================
+
+function parseEvent(payload: any) {
+  const evt = payload?.body?.eventID ? payload.body : (payload?.eventID ? payload : {})
+  const ctx = evt?.eventContext || {}
+  return {
+    eventID: evt?.eventID || '',
+    teamUUID: ctx?.teamID || '',
+    userUUID: ctx?.triggerUserID || '',
+    timestamp: evt?.timestamp || Date.now(),
+    data: evt?.eventData || {},
+  }
+}
+
+// 判断状态是否属于"已完成"类型（非状态名，是状态类型 category）
+async function checkStatusIsDone(teamUUID: string, statusID: string, statusName: string): Promise<boolean> {
+  // 方式一：GraphQL 反查 status category
+  if (teamUUID && statusID) {
+    try {
+      const res = await OPFetch(
+        `/project/api/project/team/${teamUUID}/items/graphql?t=statusCategory`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          data: { query: `{ issueStatus(uuid: "${statusID}") { uuid name category } }` },
+        }
+      ) as any
+      const category = res?.data?.issueStatus?.category
+      if (category !== undefined && category !== null) {
+        return Number(category) === 2 // 2 = 已完成
+      }
+    } catch {}
+  }
+  // 方式二：兜底——状态名关键词匹配
+  const doneKeywords = ['完成', '关闭', '已关闭', 'done', 'complete', 'closed', '已交付', 'resolved', '已解决']
+  return doneKeywords.some(k => statusName.toLowerCase().includes(k.toLowerCase()))
+}
+
+// 事件 handler — 工作项状态变更
+export async function onIssueStatusChanged(payload: any) {
+  try {
+    const evt = parseEvent(payload)
+    const data = evt.data as any
+    const teamUUID = evt.teamUUID
+    const issueID = data?.issueID || ''
+    const newStatus = data?.newStatus || {}
+    if (!issueID) return { body: {} }
+
+    // 检查是否是整改关联工作项
+    const items = await qAll(linkedIssue,
+      (v: any) => v.issue_uuid === issueID && v.link_type === 'remediation')
+    if (items.length === 0) return { body: {} }
+
+    // 判断新状态是否属于"已完成"类型
+    const isDone = await checkStatusIsDone(teamUUID, newStatus.id || '', newStatus.name || '')
+
+    // 更新快照（通常只有一条记录）
+    for (const item of items) {
+      await linkedIssue.set(item._key, {
+        ...item,
+        issue_status: isDone ? 'done' : (newStatus.name || ''),
+      })
+    }
+
+    // 如果是已完成，检查该评审单所有整改项是否全部完成
+    if (isDone) {
+      const rid = items[0].review_uuid
+      const allRemediation = await qAll(linkedIssue,
+        (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+      const allDone = allRemediation.every((v: any) => v.issue_status === 'done')
+
+      if (allDone) {
+        // 通知决议人
+        const rv = await review.get(rid)
+        if (rv) {
+          const resolutions = await qAll(resolution, (v: any) => v.review_uuid === rid)
+          const publisherUUID = resolutions[0]?.published_by || (rv as any).creator_uuid || ''
+
+          const notCfg = await getNotifyConfig()
+          if (notCfg.enabled) {
+            const phaseName = (rv as any).phase_code || ''
+            const title = (rv as any).review_title || phaseName
+            sendNotification(
+              `${((rv as any).review_type || 'dcp').toUpperCase()}评审整改完成 — ${phaseName}`,
+              `「${title}」的 ${allRemediation.length} 个整改项已全部完成，请确认。`,
+              (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
+              [publisherUUID],
+            )
+          }
+        }
+      }
+    }
+  } catch (e: any) {
+    Logger.error(`[DCP] onIssueStatusChanged error: ${e?.message || e}`)
+  }
+  return { body: {} }
+}
+
+// ============================================================
+// 整改闭环 — 查询 / 刷新 / 确认
+// ============================================================
+
+// GET /review/:review_uuid/remediation — 查询整改关联工作项
+export async function getRemediationIssues(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
+
+  const items = await qAll(linkedIssue,
+    (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+  items.sort((a: any, b: any) => (a.linked_at || 0) - (b.linked_at || 0))
+
+  const allDone = items.length > 0 && items.every((v: any) => v.issue_status === 'done')
+
+  return {
+    body: {
+      items,
+      total: items.length,
+      done_count: items.filter((v: any) => v.issue_status === 'done').length,
+      all_done: allDone,
+    }
+  }
+}
+
+// POST /review/:review_uuid/remediation/refresh — 手动刷新整改项状态（兜底）
+export async function refreshRemediationStatus(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
+  const tuid = getParam(req, 'team_uuid')
+  if (!tuid) return { body: { error: '无法获取 team_uuid' }, statusCode: 400 }
+
+  const items = await qAll(linkedIssue,
+    (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+
+  for (const item of items) {
+    try {
+      const res = await OPFetch(
+        `/project/api/project/team/${tuid}/tasks/${item.issue_uuid}`,
+        { method: 'GET', teamUUID: tuid }
+      ) as any
+      const statusName = res?.status?.name || res?.data?.status?.name || res?.status || ''
+      const statusID = res?.status?.id || res?.data?.status?.id || res?.status_uuid || ''
+      if (statusName) {
+        const isDone = await checkStatusIsDone(tuid, statusID, statusName)
+        await linkedIssue.set(item._key, {
+          ...item,
+          issue_status: isDone ? 'done' : statusName,
+        })
+      }
+    } catch {}
+  }
+
+  const updated = await qAll(linkedIssue,
+    (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+  const allDone = updated.length > 0 && updated.every((v: any) => v.issue_status === 'done')
+
+  return {
+    body: {
+      items: updated,
+      total: updated.length,
+      done_count: updated.filter((v: any) => v.issue_status === 'done').length,
+      all_done: allDone,
+    }
+  }
+}
+
+// POST /review/:review_uuid/remediation/confirm — 决议人确认整改完成
+export async function confirmRemediation(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
+  const tuid = getParam(req, 'team_uuid')
+  const b = (req.body || {}) as any
+  const { publisher_uuid, next_action } = b
+  // next_action: 'complete' | 're_review'
+
+  if (!publisher_uuid) return { body: { error: '缺少 publisher_uuid' }, statusCode: 400 }
+  if (!next_action || !['complete', 're_review'].includes(next_action)) {
+    return { body: { error: 'next_action 必须为 complete 或 re_review' }, statusCode: 400 }
+  }
+
+  const rv = await review.get(rid)
+  if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
+
+  const effState = getEffectiveState(rv)
+  if (effState !== 'remediation_pending') {
+    return { body: { error: '当前状态不可确认整改' }, statusCode: 400 }
+  }
+
+  // 校验：至少有一个整改项
+  const items = await qAll(linkedIssue,
+    (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+  if (items.length === 0) {
+    return { body: { error: '请先创建或关联整改工作项' }, statusCode: 400 }
+  }
+
+  // 校验：所有整改项已完成
+  const notDone = items.filter((v: any) => v.issue_status !== 'done')
+  if (notDone.length > 0) {
+    return {
+      body: {
+        error: `仍有 ${notDone.length} 个整改项未完成`,
+        pending: notDone.map((v: any) => v.issue_title || v.issue_uuid),
+      },
+      statusCode: 400
+    }
+  }
+
+  const now = Date.now()
+
+  // 1. 给每个整改工作项发评论（备注）
+  if (tuid) {
+    const reviewNumber = (rv as any).review_number || rid
+    const commentText = `整改已由决议人确认完成（评审单 ${reviewNumber}）。本工作项已锁定，请勿再修改。`
+    for (const item of items) {
+      try {
+        await OPFetch(
+          `/project/api/project/team/${tuid}/items/graphql?t=addComment`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            teamUUID: tuid,
+            data: {
+              query: `mutation { addComment(input: { issueID: "${item.issue_uuid}", content: "${commentText.replace(/"/g, '\\"')}" }) { success } }`,
+            },
+          }
+        )
+      } catch (e: any) {
+        Logger.error(`[DCP] addComment for ${item.issue_uuid} failed: ${e?.message || e}`)
+      }
+    }
+  }
+
+  // 2. 锁定工作项（更新 linkedIssue.locked）
+  for (const item of items) {
+    await linkedIssue.set(item._key, {
+      ...item,
+      locked: 'locked',
+      locked_at: now,
+      locked_by: publisher_uuid,
+    })
+  }
+
+  // 3. 评审单状态流转
+  const targetState = next_action === 're_review' ? 're_reviewing' : 'completed'
+  const reason = next_action === 're_review'
+    ? '整改完成，发起复审'
+    : '整改完成，评审通过'
+
+  // 如果是复审，round_no + 1，重置 reviewers_json 中评审人 submitted_at
+  let newRoundNo = (rv as any).round_no || 1
+  let newReviewersJson = (rv as any).reviewers_json || '[]'
+  if (next_action === 're_review') {
+    newRoundNo = newRoundNo + 1
+    const snap = jsonArr(newReviewersJson)
+    newReviewersJson = JSON.stringify(snap.map((r: any) => ({
+      ...r,
+      submitted_at: 0,
+      conclusion: '',
+      opinion_summary: '',
+    })))
+  }
+
+  const stateFields = buildStateTransition(rv, targetState, publisher_uuid, reason)
+  await review.set(rid, {
+    ...rv,
+    ...stateFields,
+    round_no: newRoundNo,
+    reviewers_json: newReviewersJson,
+  })
+
+  await writeAudit(rid, publisher_uuid, '确认整改完成', rid,
+    `整改项 ${items.length} 个全部完成，${next_action === 're_review' ? '进入复审' : '评审完成'}`)
+
+  // 4. 通知整改负责人工作项已锁定
+  const notCfg = await getNotifyConfig()
+  if (notCfg.enabled) {
+    const ownerUUIDs = [...new Set(items.map((v: any) => v.linked_by).filter(Boolean))] as string[]
+    if (ownerUUIDs.length > 0) {
+      sendNotification(
+        `${((rv as any).review_type || 'dcp').toUpperCase()}整改已确认 — ${(rv as any).phase_code || ''}`,
+        `「${(rv as any).review_title || (rv as any).phase_code}」整改已由决议人确认完成，关联工作项已锁定。`,
+        (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
+        ownerUUIDs,
+      )
+    }
+  }
+
+  return { body: { ok: true, review_state: targetState, round_no: newRoundNo } }
 }

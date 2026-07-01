@@ -734,6 +734,9 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  if (!resolutionForm.final_conclusion) {
  setResolutionMsg('请选择决议结果'); return
  }
+ if ((resolutionForm.final_conclusion === 'conditional_pass' || resolutionForm.final_conclusion === 'rework') && !resolutionForm.condition_notes.trim()) {
+ setResolutionMsg('结论为「有条件通过」或「返工」时，必须填写条件说明'); return
+ }
  setResolving(true)
  setResolutionMsg('')
  try {
@@ -1212,8 +1215,13 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  </div>
  </div>
  <div style={{ ...S.formGroup, marginTop: 8 }}>
- <label style={S.label}>条件说明</label>
- <textarea style={S.textarea} rows={3} value={resolutionForm.condition_notes} onChange={e => setResolutionForm({ ...resolutionForm, condition_notes: e.target.value })} placeholder="（可选）如为'有条件通过'，请说明条件…" />
+ <label style={S.label}>{(resolutionForm.final_conclusion === 'conditional_pass' || resolutionForm.final_conclusion === 'rework') ? '条件说明 *' : '条件说明'}</label>
+ <textarea style={S.textarea} rows={3} value={resolutionForm.condition_notes} onChange={e => setResolutionForm({ ...resolutionForm, condition_notes: e.target.value })} placeholder={(resolutionForm.final_conclusion === 'conditional_pass' || resolutionForm.final_conclusion === 'rework') ? '请填写条件说明（必填）…' : "（可选）如为'有条件通过'，请说明条件…"} />
+ {(resolutionForm.final_conclusion === 'conditional_pass' || resolutionForm.final_conclusion === 'rework') && (
+   <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: '#e6f4ff', color: '#1677ff' }}>
+     发布后可在整改项区域创建/关联整改工作项，完成整改后确认闭环。
+   </div>
+ )}
  </div>
 
  {/* 评审意见预览 */}

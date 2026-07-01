@@ -648,6 +648,17 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   const [meetingTimeDraft, setMeetingTimeDraft] = useState('')
   const [savingMeetingTime, setSavingMeetingTime] = useState(false)
   const [reminding, setReminding] = useState(false)
+  const [remediationRefreshing, setRemediationRefreshing] = useState(false)
+  const [remediationMsg, setRemediationMsg] = useState('')
+  const [showRemediationConfirm, setShowRemediationConfirm] = useState(false)
+  const [remediationConfirming, setRemediationConfirming] = useState(false)
+  const [showCreateRemediation, setShowCreateRemediation] = useState(false)
+  const [showLinkRemediation, setShowLinkRemediation] = useState(false)
+  const [createRemediationForm, setCreateRemediationForm] = useState({ title: '' })
+  const [linkRemediationForm, setLinkRemediationForm] = useState({ issue_uuid: '', issue_number: '', issue_title: '' })
+  const [creatingRemediation, setCreatingRemediation] = useState(false)
+  const [linkingRemediation, setLinkingRemediation] = useState(false)
+  const [remediationIssueType, setRemediationIssueType] = useState('')
 
   useEffect(() => {
     fetch('/project/api/project/users/me', { credentials: 'include' })
@@ -664,6 +675,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       setResolutionRule(rules[rvReviewType] || null)
       setConfigRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === rvReviewType))
       if (c.review_recall_config) setRecallConfig(c.review_recall_config)
+      if (c.config?.remediation_issue_type) setRemediationIssueType(c.config.remediation_issue_type)
     }).catch(() => {})
   }, [rvReviewType])
 
@@ -775,6 +787,101 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       onRefresh()
     } catch (e: any) { setMsg(e.message || '操作失败') }
     finally { setTransitioning(false) }
+  }
+
+  // ---- 整改闭环 ----
+  async function handleRefreshRemediation() {
+    setRemediationRefreshing(true)
+    setRemediationMsg('')
+    try {
+      await api.refreshRemediationStatus(rv.review_uuid)
+      onRefresh()
+    } catch (e: any) { setRemediationMsg(e.message || '刷新失败') }
+    finally { setRemediationRefreshing(false) }
+  }
+
+  async function handleConfirmRemediation(nextAction: 'complete' | 're_review') {
+    setRemediationConfirming(true)
+    setRemediationMsg('')
+    try {
+      await api.confirmRemediation(rv.review_uuid, {
+        publisher_uuid: currentUser.uuid || '',
+        next_action: nextAction,
+      })
+      setShowRemediationConfirm(false)
+      onRefresh()
+    } catch (e: any) { setRemediationMsg(e.message || '操作失败') }
+    finally { setRemediationConfirming(false) }
+  }
+
+  async function handleCreateRemediationIssue() {
+    if (!createRemediationForm.title.trim()) { setRemediationMsg('请填写工作项标题'); return }
+    setCreatingRemediation(true)
+    setRemediationMsg('')
+    try {
+      const tuid = getTeamUUID()
+      const taskUuid = Array.from({ length: 16 }, () => '0123456789abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 36)]).join('')
+      const add3Res = await fetch(`/project/api/project/team/${tuid}/tasks/add3`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tasks: [{
+            uuid: taskUuid,
+            project_uuid: projectUuid,
+            field_values: [
+              { field_uuid: 'field001', value: createRemediationForm.title },
+              { field_uuid: 'field006', value: projectUuid },
+            ],
+          }],
+        }),
+      })
+      if (add3Res.ok) {
+        const data = await add3Res.json()
+        const task = data?.tasks?.[0]
+        if (task?.uuid) {
+          await api.linkIssue(rv.review_uuid, {
+            issue_uuid: task.uuid,
+            issue_number: task.display_id || task.uuid,
+            issue_title: createRemediationForm.title,
+            issue_type: remediationIssueType || '',
+            issue_status: 'open',
+            linked_by: currentUser.uuid || '',
+            linked_by_name: currentUser.name || '',
+            link_type: 'remediation',
+          })
+          setCreateRemediationForm({ title: '' })
+          setShowCreateRemediation(false)
+          onRefresh()
+          return
+        }
+      }
+      const add3Text = await add3Res.text()
+      throw new Error(`创建失败: ${add3Res.status} ${add3Text.slice(0, 200)}`)
+    } catch (e: any) {
+      setRemediationMsg(e.message || '创建失败，可尝试跳转 ONES 手动创建后关联')
+    } finally { setCreatingRemediation(false) }
+  }
+
+  async function handleLinkRemediationIssue() {
+    if (!linkRemediationForm.issue_uuid.trim()) { setRemediationMsg('请填写工作项 UUID'); return }
+    setLinkingRemediation(true)
+    setRemediationMsg('')
+    try {
+      await api.linkIssue(rv.review_uuid, {
+        issue_uuid: linkRemediationForm.issue_uuid.trim(),
+        issue_number: linkRemediationForm.issue_number.trim(),
+        issue_title: linkRemediationForm.issue_title.trim(),
+        issue_type: remediationIssueType || '',
+        issue_status: 'open',
+        linked_by: currentUser.uuid || '',
+        linked_by_name: currentUser.name || '',
+        link_type: 'remediation',
+      })
+      setLinkRemediationForm({ issue_uuid: '', issue_number: '', issue_title: '' })
+      setShowLinkRemediation(false)
+      onRefresh()
+    } catch (e: any) { setRemediationMsg(e.message || '关联失败') }
+    finally { setLinkingRemediation(false) }
   }
 
   async function handlePublishResolution() {

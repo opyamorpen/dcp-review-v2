@@ -92,6 +92,7 @@ declare var ONESEntities: {
             uploaded_at?: number;
             updated_by?: string;
             updated_at?: number;
+            round_no?: number;
         };
         indexes: null;
     };
@@ -116,6 +117,7 @@ declare var ONESEntities: {
             risk_level?: string;
             opinion_summary?: string;
             submitted_at?: number;
+            round_no?: number;
         };
         indexes: null;
     };
@@ -130,6 +132,11 @@ declare var ONESEntities: {
             linked_by?: string;
             linked_by_name?: string;
             linked_at?: number;
+            link_type?: string;
+            round_no?: number;
+            locked?: string;
+            locked_at?: number;
+            locked_by?: string;
         };
         indexes: null;
     };
@@ -147,6 +154,7 @@ declare var ONESEntities: {
             published_by?: string;
             published_by_name?: string;
             published_at?: number;
+            round_no?: number;
         };
         indexes: null;
     };

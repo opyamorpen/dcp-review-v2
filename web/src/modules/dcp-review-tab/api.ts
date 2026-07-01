@@ -140,3 +140,9 @@ export const transitionReview = (uuid: string, data: { target_state: string; ope
   callApi(`/dcp/review/${uuid}/transition`, { method: 'POST', body: JSON.stringify(data) })
 export const getReviewState = (uuid: string) => callApi(`/dcp/review/${uuid}/state`)
 export const getReviewRounds = (uuid: string) => callApi(`/dcp/review/${uuid}/rounds`)
+
+// ---- 整改闭环 ----
+export const getRemediationIssues = (uuid: string) => callApi(`/dcp/review/${uuid}/remediation`)
+export const refreshRemediationStatus = (uuid: string) => callApi(`/dcp/review/${uuid}/remediation/refresh`, { method: 'POST' })
+export const confirmRemediation = (uuid: string, data: { publisher_uuid: string; next_action: 'complete' | 're_review' }) =>
+  callApi(`/dcp/review/${uuid}/remediation/confirm`, { method: 'POST', body: JSON.stringify(data) })
