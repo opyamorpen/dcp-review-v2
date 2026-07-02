@@ -496,6 +496,7 @@ const ReviewerWorkspace: React.FC<{
  const [remediationIssueType, setRemediationIssueType] = useState('')
 
  // 加载当前评审类型的决议规则配置 + 角色列表 + 整改项类型
+ const _rvReviewType = (rv.review_type || 'dcp')
  useEffect(() => {
    callApi('/dcp/config').then((c: any) => {
      const rules = c.resolution_rule_config || {}
