@@ -464,15 +464,8 @@ const ReviewerWorkspace: React.FC<{
  const _wsRoundNo = rv.round_no || 1
  const alreadySubmitted = !!(myReviewer?.submitted_at > 0 && (myReviewer?.round_no || 1) === _wsRoundNo)
 
- // 决议角色同步判断（用于渲染时 decisionRule 尚未加载完成的情况）
- const _rvReviewType = (rv.review_type || 'dcp')
- const _defaultPubRole = _rvReviewType === 'tr' ? '技术负责人' : 'IPMT代表'
- const _rvResolutionRule = (data as any).resolution_rule
- const _pubRole = _rvResolutionRule?.publisher?.role || _rvResolutionRule?.publisher?.roles?.[0] || _defaultPubRole
- const _isPublisherSync = myRole === _pubRole
-
- // 决议人看全部整改项，评审人只看自己创建的
- const issues = _isPublisherSync ? allIssues : allIssues.filter((iss: any) => iss.linked_by === currentUser.uuid)
+ // 评审人只看自己创建的整改项（决议人看全部，在渲染时用 canPublish 判断）
+ const myIssues = allIssues.filter((iss: any) => iss.linked_by === currentUser.uuid)
 
  const [opinionForm, setOpinionForm] = useState({
  reviewer_uuid: currentUser.uuid || '',
@@ -1110,7 +1103,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  {opinionForm.conclusion === 'conditional_pass' && (
    <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#fff7e6', color: '#fa8c16', border: '1px solid #faad14' }}>
      选择「有条件通过」时，必须先在下方创建至少 1 个整改项后再提交。
-     {issues.some((iss: any) => iss.link_type === 'remediation')
+     {myIssues.some((iss: any) => iss.link_type === 'remediation')
        ? <span style={{ color: '#52c41a' }}> 已创建整改项。</span>
        : <span style={{ color: '#ff4d4f' }}> 当前无整改项，请先创建。</span>}
    </div>
@@ -1121,6 +1114,129 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  )}
 </div>
 )}
+
+{/* 评审意见汇总 */}
+{(isResolutionMode || canPublish) && reviewers.length > 0 && (
+  <div style={S.card}>
+    <h4 style={S.sectionTitle}>评审意见汇总</h4>
+    <div style={S.tableWrap}>
+    <table style={S.table}>
+    <thead><tr>
+    <th style={S.th}>角色</th><th style={S.th}>投票</th><th style={S.th}>风险</th><th style={S.th}>意见</th>
+    </tr></thead>
+    <tbody>
+    {reviewers.map((v: any, i: number) => (
+    <tr key={i}>
+    <td style={S.td}>{v.role_name}</td>
+    <td style={S.td}>
+    <span style={{ color: v.conclusion === 'pass' ? '#52c41a' : v.conclusion === 'conditional_pass' ? '#faad14' : '#ff4d4f' }}>
+    {v.conclusion === 'pass' ? '✅ 通过' : v.conclusion === 'conditional_pass' ? '⚠️ 有条件通过' : v.submitted_at > 0 ? '❌ 不通过' : '— 未投票'}
+    </span>
+    </td>
+    <td style={S.td}>{v.risk_level === 'low' ? '低' : v.risk_level === 'high' ? '高' : '中'}</td>
+    <td style={{ ...S.td, fontSize: 12, color: '#666', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.opinion_summary || '-'}</td>
+    </tr>
+    ))}
+    </tbody>
+    </table>
+    </div>
+  </div>
+)}
+
+{/* 整改工作项 */}
+ <div style={S.card}>
+ <h4 style={S.sectionTitle}>{canPublish ? '整改项' : '我的整改项'}（{(canPublish ? allIssues : myIssues).length}个）</h4>
+ {!canPublish && allIssues.length > myIssues.length && <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>（共 {allIssues.length} 个关联工作项，仅显示你创建的 {myIssues.length} 个）</div>}
+ {(canPublish ? allIssues : myIssues).length === 0 ? <div style={{ color: '#999', padding: 12, textAlign: 'center', fontSize: 13 }}>{canPublish ? '暂无整改项' : (allIssues.length > 0 ? '其他评审人已创建工作项，你尚未创建' : '暂无关联工作项')}</div> :
+ <table style={S.table}>
+ <thead><tr>
+ <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>类型</th><th style={{ ...S.th, width: 80 }}>状态</th><th style={{ ...S.th, width: 80 }}>创建者</th>
+ </tr></thead>
+ <tbody>
+ {(canPublish ? allIssues : myIssues).map((iss: any, i: number) => (
+ <tr key={i}>
+ <td style={S.td}><code style={{ fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 12)}</code></td>
+ <td style={S.td}>
+ <a href={taskUrl(iss)} target="_blank" style={{ color: '#1677ff', textDecoration: 'none' }} rel="noreferrer">
+ {iss.issue_title || '-'}
+ </a>
+ </td>
+ <td style={S.td}>{iss.issue_type || '-'}</td>
+ <td style={S.td}>{iss.issue_status || '-'}</td>
+ <td style={S.td}>{iss.linked_by_name || (iss.linked_by ? iss.linked_by.substring(0, 8) : '-')}</td>
+ </tr>
+ ))}
+ </tbody>
+ </table>}
+ <div style={{ marginTop: 16, borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
+ {alreadySubmitted && !canPublish ? (
+   <div style={{ padding: '12px', textAlign: 'center', fontSize: 13, color: '#999' }}>
+     已提交评审意见，不可再创建整改项
+   </div>
+ ) : (
+ <>
+ <h4 style={{ ...S.sectionTitle, fontSize: 13 }}>+ 创建整改项</h4>
+ {createIssueMsg && <div style={{ marginBottom: 8, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: createIssueFallback ? '#fff7e6' : '#fff2f0', color: createIssueFallback ? '#faad14' : '#cf1322' }}>{createIssueMsg}
+ {createIssueFallback && (
+ <div style={{ marginTop: 8 }}>
+ <a href="#" onClick={e => {
+ e.preventDefault()
+ try { window.parent.location.href = window.parent.location.origin + '/' + createIssueFallback } catch {}
+ }} style={{ display: 'inline-block', padding: '6px 16px', borderRadius: 4, background: '#1677ff', color: '#fff', textDecoration: 'none', fontSize: 13 }}>
+ 跳转到 ONES 原生创建页面
+ </a>
+ </div>
+ )}
+ </div>}
+ <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+ <div style={S.formGroup}>
+ <label style={S.label}>标题 *</label>
+ <input style={{ ...S.input, width: 200 }} value={createIssueForm.title} onChange={e => setCreateIssueForm({ ...createIssueForm, title: e.target.value })} placeholder="工作项标题" />
+ </div>
+ <div style={S.formGroup}>
+ <label style={S.label}>类型{remediationIssueType ? '' : ''}</label>
+ {loadingTypes ? <span style={{ fontSize: 12, color: '#999' }}>加载中…</span> :
+ remediationIssueType ? (
+   // 配置了整改项类型：锁定显示，不可修改
+   <input style={{ ...S.input, background: '#f5f5f5', color: '#666' }} value={remediationIssueType} disabled />
+ ) : (
+   // 未配置：允许选择
+   <SearchableTypePicker
+     types={issueTypes.length > 0 ? issueTypes : [
+       { scope_uuid: '', issue_type_uuid: '', name: '任务' },
+       { scope_uuid: '', issue_type_uuid: '', name: '需求' },
+       { scope_uuid: '', issue_type_uuid: '', name: '缺陷' },
+       { scope_uuid: '', issue_type_uuid: '', name: '子任务' },
+     ]}
+     value={createIssueForm.issue_type_scope_uuid}
+     onChange={(scopeUuid, issueTypeUuid) => setCreateIssueForm({
+       ...createIssueForm, issue_type_scope_uuid: scopeUuid, issue_type_id: issueTypeUuid,
+     })}
+   />
+ )
+ }
+ </div>
+ <div style={S.formGroup}>
+ <label style={S.label}>项目 *</label>
+ <input style={{ ...S.input, background: '#f5f5f5', color: '#666' }} value={projectDisplayName} disabled placeholder="当前项目" />
+ </div>
+ <div style={S.formGroup}>
+ <label style={S.label}>负责人 *</label>
+ <UserPicker value={createIssueForm.assignee_uuid} onChange={u => setCreateIssueForm({ ...createIssueForm, assignee_uuid: u.uuid })} placeholder="搜索用户…（必填）" />
+ </div>
+ <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+ <button style={{ ...S.btn(true), marginBottom: 0 }} onClick={handleCreateIssue} disabled={creating}>
+ {creating ? '创建中…' : '创建整改项'}
+ </button>
+ <button style={{ ...S.btn(false), marginBottom: 0 }} onClick={resolveAndOpenCreateIssue} disabled={resolvingProject}>
+ {resolvingProject ? '解析中…' : '跳转ONES手动创建'}
+ </button>
+ </div>
+ </div>
+ </>
+ )}
+ </div>
+ </div>
 
 {/* 决议（发布人可见） */}
  {(() => {
@@ -1284,32 +1400,6 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  )}
  </div>
 
- {/* 评审意见预览 */}
- <div style={{ marginTop: 12 }}>
- <label style={S.label}>评审意见汇总</label>
- <div style={S.tableWrap}>
- <table style={S.table}>
- <thead><tr>
- <th style={S.th}>角色</th><th style={S.th}>投票</th><th style={S.th}>风险</th><th style={S.th}>意见</th>
- </tr></thead>
- <tbody>
- {reviewers.map((r: any, i: number) => (
- <tr key={i}>
- <td style={S.td}>{r.role_name}</td>
- <td style={S.td}>
- <span style={{ color: r.conclusion === 'pass' ? '#52c41a' : r.conclusion === 'conditional_pass' ? '#faad14' : '#ff4d4f' }}>
- {r.conclusion === 'pass' ? '✅ 通过' : r.conclusion === 'conditional_pass' ? '⚠️ 有条件通过' : r.submitted_at > 0 ? '❌ 不通过' : '— 未投票'}
- </span>
- </td>
- <td style={S.td}>{r.risk_level === 'low' ? '低' : r.risk_level === 'high' ? '高' : '中'}</td>
- <td style={{ ...S.td, fontSize: 12, color: '#666', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.opinion_summary || '-'}</td>
- </tr>
- ))}
- </tbody>
- </table>
- </div>
-</div>
-
 <button style={{ ...S.btn(true), marginTop: 12, background: '#faad14' }} onClick={handlePublishResolution} disabled={resolving}>
  {resolving ? '发布中…' : '发布决议'}
  </button>
@@ -1341,132 +1431,10 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
      : `评审进度: ${done}/${reviewers.length} 已提交（全部提交后由决议发布人发布决议）`
  })()}
 </div>
-{/* 决议模式下展示评审人意见汇总 */}
-{isResolutionMode && reviewers.length > 0 && (
-  <div style={{ marginTop: 12 }}>
-    <label style={S.label}>评审意见汇总</label>
-    <div style={S.tableWrap}>
-    <table style={S.table}>
-    <thead><tr>
-    <th style={S.th}>角色</th><th style={S.th}>投票</th><th style={S.th}>风险</th><th style={S.th}>意见</th>
-    </tr></thead>
-    <tbody>
-    {reviewers.map((v: any, i: number) => (
-    <tr key={i}>
-    <td style={S.td}>{v.role_name}</td>
-    <td style={S.td}>
-    <span style={{ color: v.conclusion === 'pass' ? '#52c41a' : v.conclusion === 'conditional_pass' ? '#faad14' : '#ff4d4f' }}>
-    {v.conclusion === 'pass' ? '✅ 通过' : v.conclusion === 'conditional_pass' ? '⚠️ 有条件通过' : v.submitted_at > 0 ? '❌ 不通过' : '— 未投票'}
-    </span>
-    </td>
-    <td style={S.td}>{v.risk_level === 'low' ? '低' : v.risk_level === 'high' ? '高' : '中'}</td>
-    <td style={{ ...S.td, fontSize: 12, color: '#666', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.opinion_summary || '-'}</td>
-    </tr>
-    ))}
-    </tbody>
-    </table>
-    </div>
-  </div>
-)}
 </div>
  )
  })()}
-
- {/* 整改工作项 */}
- <div style={S.card}>
- <h4 style={S.sectionTitle}>{canPublish ? '整改项' : '我的整改项'}（{issues.length}个）</h4>
- {!canPublish && allIssues.length > issues.length && <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>（共 {allIssues.length} 个关联工作项，仅显示你创建的 {issues.length} 个）</div>}
- {issues.length === 0 ? <div style={{ color: '#999', padding: 12, textAlign: 'center', fontSize: 13 }}>{canPublish ? '暂无整改项' : (allIssues.length > 0 ? '其他评审人已创建工作项，你尚未创建' : '暂无关联工作项')}</div> :
- <table style={S.table}>
- <thead><tr>
- <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>类型</th><th style={{ ...S.th, width: 80 }}>状态</th><th style={{ ...S.th, width: 80 }}>创建者</th>
- </tr></thead>
- <tbody>
- {issues.map((iss: any, i: number) => (
- <tr key={i}>
- <td style={S.td}><code style={{ fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 12)}</code></td>
- <td style={S.td}>
- <a href={taskUrl(iss)} target="_blank" style={{ color: '#1677ff', textDecoration: 'none' }} rel="noreferrer">
- {iss.issue_title || '-'}
- </a>
- </td>
- <td style={S.td}>{iss.issue_type || '-'}</td>
- <td style={S.td}>{iss.issue_status || '-'}</td>
- <td style={S.td}>{iss.linked_by_name || (iss.linked_by ? iss.linked_by.substring(0, 8) : '-')}</td>
- </tr>
- ))}
- </tbody>
- </table>}
- <div style={{ marginTop: 16, borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
- {alreadySubmitted && !canPublish ? (
-   <div style={{ padding: '12px', textAlign: 'center', fontSize: 13, color: '#999' }}>
-     已提交评审意见，不可再创建整改项
-   </div>
- ) : (
- <>
- <h4 style={{ ...S.sectionTitle, fontSize: 13 }}>+ 创建整改项</h4>
- {createIssueMsg && <div style={{ marginBottom: 8, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: createIssueFallback ? '#fff7e6' : '#fff2f0', color: createIssueFallback ? '#faad14' : '#cf1322' }}>{createIssueMsg}
- {createIssueFallback && (
- <div style={{ marginTop: 8 }}>
- <a href="#" onClick={e => {
- e.preventDefault()
- try { window.parent.location.href = window.parent.location.origin + '/' + createIssueFallback } catch {}
- }} style={{ display: 'inline-block', padding: '6px 16px', borderRadius: 4, background: '#1677ff', color: '#fff', textDecoration: 'none', fontSize: 13 }}>
- 跳转到 ONES 原生创建页面
- </a>
- </div>
- )}
- </div>}
- <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
- <div style={S.formGroup}>
- <label style={S.label}>标题 *</label>
- <input style={{ ...S.input, width: 200 }} value={createIssueForm.title} onChange={e => setCreateIssueForm({ ...createIssueForm, title: e.target.value })} placeholder="工作项标题" />
- </div>
- <div style={S.formGroup}>
- <label style={S.label}>类型{remediationIssueType ? '' : ''}</label>
- {loadingTypes ? <span style={{ fontSize: 12, color: '#999' }}>加载中…</span> :
- remediationIssueType ? (
-   // 配置了整改项类型：锁定显示，不可修改
-   <input style={{ ...S.input, background: '#f5f5f5', color: '#666' }} value={remediationIssueType} disabled />
- ) : (
-   // 未配置：允许选择
-   <SearchableTypePicker
-     types={issueTypes.length > 0 ? issueTypes : [
-       { scope_uuid: '', issue_type_uuid: '', name: '任务' },
-       { scope_uuid: '', issue_type_uuid: '', name: '需求' },
-       { scope_uuid: '', issue_type_uuid: '', name: '缺陷' },
-       { scope_uuid: '', issue_type_uuid: '', name: '子任务' },
-     ]}
-     value={createIssueForm.issue_type_scope_uuid}
-     onChange={(scopeUuid, issueTypeUuid) => setCreateIssueForm({
-       ...createIssueForm, issue_type_scope_uuid: scopeUuid, issue_type_id: issueTypeUuid,
-     })}
-   />
- )
- }
- </div>
- <div style={S.formGroup}>
- <label style={S.label}>项目 *</label>
- <input style={{ ...S.input, background: '#f5f5f5', color: '#666' }} value={projectDisplayName} disabled placeholder="当前项目" />
- </div>
- <div style={S.formGroup}>
- <label style={S.label}>负责人 *</label>
- <UserPicker value={createIssueForm.assignee_uuid} onChange={u => setCreateIssueForm({ ...createIssueForm, assignee_uuid: u.uuid })} placeholder="搜索用户…（必填）" />
- </div>
- <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
- <button style={{ ...S.btn(true), marginBottom: 0 }} onClick={handleCreateIssue} disabled={creating}>
- {creating ? '创建中…' : '创建整改项'}
- </button>
- <button style={{ ...S.btn(false), marginBottom: 0 }} onClick={resolveAndOpenCreateIssue} disabled={resolvingProject}>
- {resolvingProject ? '解析中…' : '跳转ONES手动创建'}
- </button>
- </div>
- </div>
- </>
- )}
- </div>
- </div>
- {previewLoading && (
+{previewLoading && (
  <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
  <div style={{ background: '#fff', padding: '20px 32px', borderRadius: 8, fontSize: 14, color: '#666' }}>加载预览中…</div>
  </div>
