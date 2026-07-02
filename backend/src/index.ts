@@ -1143,13 +1143,16 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
     // 整改关联工作项
     const remediationIssues = issues.filter((v: any) => v.link_type === 'remediation')
     const remediationAllDone = remediationIssues.length > 0 && remediationIssues.every((v: any) => isIssueStatusDone(v.issue_status))
+    // 兼容旧数据：issue_status='done' 还原为「已完成」
+    const issuesNormalized = issues.map((v: any) => ({ ...v, issue_status: normalizeIssueStatus(v.issue_status) }))
+    const remediationIssuesNormalized = issuesNormalized.filter((v: any) => v.link_type === 'remediation')
     return { body: {
       review: { ...rvWithPhase, effective_state: _rvEffState, round_no: _currentRoundNo },
       materials: matsWithTpl,
       indicators: indsWithTpl,
       reviewers,
-      linked_issues: issues,
-      remediation_issues: remediationIssues,
+      linked_issues: issuesNormalized,
+      remediation_issues: remediationIssuesNormalized,
       remediation_all_done: remediationAllDone,
       resolution: resList.find((r: any) => (r.round_no || 1) === _currentRoundNo) || null,
       resolutions: resList.sort((a: any, b: any) => (a.round_no || 1) - (b.round_no || 1)),
@@ -2294,7 +2297,8 @@ export async function getLinkedIssues(req: any): Promise<PluginResponse> {
   if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
   const issues = await qAll(linkedIssue, (v: any) => v.review_uuid === rid)
   issues.sort((a: any, b: any) => (b.linked_at || 0) - (a.linked_at || 0))
-  return { body: { issues } }
+  const issuesNormalized = issues.map((v: any) => ({ ...v, issue_status: normalizeIssueStatus(v.issue_status) }))
+  return { body: { issues: issuesNormalized } }
 }
 
 // ============================================================
@@ -2631,7 +2635,7 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   const snapshotIssues = snapIssues.map((iss: any) => ({
     issue_number: iss.issue_number || '',
     issue_title: iss.issue_title || '',
-    issue_status: iss.issue_status || '',
+    issue_status: normalizeIssueStatus(iss.issue_status),
     linked_by_name: iss.linked_by_name || '',
     locked: iss.locked || '',
   }))
@@ -3309,6 +3313,12 @@ function isIssueStatusDone(status: string): boolean {
   return DONE_KEYWORDS.some(k => (status || '').toLowerCase().includes(k.toLowerCase()))
 }
 
+// 兼容旧数据：旧版本把已完成状态名替换为 'done' 存入实体，读取时还原为「已完成」
+function normalizeIssueStatus(status: string): string {
+  if (status === 'done') return '已完成'
+  return status || ''
+}
+
 // 判断状态是否属于"已完成"类型（非状态名，是状态类型 category）
 async function checkStatusIsDone(teamUUID: string, statusID: string, statusName: string): Promise<boolean> {
   // 方式一：GraphQL 反查 status category
@@ -3410,12 +3420,13 @@ export async function getRemediationIssues(req: any): Promise<PluginResponse> {
   items.sort((a: any, b: any) => (a.linked_at || 0) - (b.linked_at || 0))
 
   const allDone = items.length > 0 && items.every((v: any) => isIssueStatusDone(v.issue_status))
+  const itemsNormalized = items.map((v: any) => ({ ...v, issue_status: normalizeIssueStatus(v.issue_status) }))
 
   return {
     body: {
-      items,
-      total: items.length,
-      done_count: items.filter((v: any) => isIssueStatusDone(v.issue_status)).length,
+      items: itemsNormalized,
+      total: itemsNormalized.length,
+      done_count: itemsNormalized.filter((v: any) => isIssueStatusDone(v.issue_status)).length,
       all_done: allDone,
     }
   }
@@ -3452,12 +3463,13 @@ export async function refreshRemediationStatus(req: any): Promise<PluginResponse
   const updated = await qAll(linkedIssue,
     (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
   const allDone = updated.length > 0 && updated.every((v: any) => isIssueStatusDone(v.issue_status))
+  const updatedNormalized = updated.map((v: any) => ({ ...v, issue_status: normalizeIssueStatus(v.issue_status) }))
 
   return {
     body: {
-      items: updated,
-      total: updated.length,
-      done_count: updated.filter((v: any) => isIssueStatusDone(v.issue_status)).length,
+      items: updatedNormalized,
+      total: updatedNormalized.length,
+      done_count: updatedNormalized.filter((v: any) => isIssueStatusDone(v.issue_status)).length,
       all_done: allDone,
     }
   }
@@ -3496,7 +3508,7 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
       isDone = doneKeywords.some(k => (item.status_name || '').toLowerCase().includes(k.toLowerCase()))
     }
 
-    const newStatus = isDone ? 'done' : (item.status_name || 'open')
+    const newStatus = item.status_name || 'open'
     if (linked.issue_status !== newStatus) {
       // 必须剥离 _key，否则 ONES 实体 API 报 EntityDataValueAttrNotFound → 500
       const { _key, ...rest } = linked
@@ -3543,7 +3555,7 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
     body: {
       ok: true,
       updated_count: updatedCount,
-      items: updated,
+      items: updated.map((v: any) => ({ ...v, issue_status: normalizeIssueStatus(v.issue_status) })),
       total: updated.length,
       done_count: updated.filter((v: any) => isIssueStatusDone(v.issue_status)).length,
       all_done: allDone,
