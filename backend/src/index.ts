@@ -434,6 +434,19 @@ function getPublisherRole(rule: any): string {
   return ''
 }
 
+// 判断某个 user_uuid 是否是本评审的决议发布角色
+async function isPublisherRole(rv: any, userUuid: string): Promise<boolean> {
+  const _rvType = (rv as any).review_type || 'dcp'
+  const _rule = await getResolutionRuleByType(_rvType)
+  const _pubRole = getPublisherRole(_rule)
+  if (!_pubRole) return false
+  const rid = (rv as any).review_uuid
+  let allRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+  if (allRvrs.length === 0) allRvrs = jsonArr((rv as any).reviewers_json || '[]')
+  const me = allRvrs.find((r: any) => r.reviewer_uuid === userUuid)
+  return !!(me && me.role_name === _pubRole)
+}
+
 // 深度合并：以默认规则为骨架，savedR 中存在的字段覆盖默认值
 function deepMergeRule(defaultR: any, savedR: any): any {
   if (!savedR || typeof savedR !== 'object' || Array.isArray(savedR)) return defaultR
@@ -2152,6 +2165,19 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
     }
   }
 
+  // Checklist 全部完成校验：当前用户角色的所有检查项必须已勾选（pass/fail），不能有 unchecked
+  {
+    const cl = jsonArr((rv as any).checklist_json || '[]')
+    const myChecklistItems = cl.filter((c: any) => c.role_name === role_name)
+    if (myChecklistItems.length > 0) {
+      const uncheckedItems = myChecklistItems.filter((c: any) => !c.status || c.status === 'unchecked')
+      if (uncheckedItems.length > 0) {
+        const names = uncheckedItems.map((c: any) => c.item_text || c.template_id).join('、')
+        return { body: { error: `请先完成所有 Checklist 勾选后再提交评审意见，未勾选项：${names}` }, statusCode: 400 }
+      }
+    }
+  }
+
   const ts = Date.now()
   const newData = {
     review_uuid: rid, reviewer_uuid, role_name,
@@ -2203,7 +2229,7 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
     const publisher = updatedSnap.find((r: any) => r.role_name === _pubRole)
     if (publisher && publisher.reviewer_uuid) {
       const phaseName = (rv as any).phase_code || ''
-      sendNotification(
+      await sendNotification(
         `${_rvType.toUpperCase()}决议通知 — ${phaseName}`,
         `「${phaseName}」评审已满足决议条件，请前往发布决议。`,
         `${(rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : ''}`,
@@ -2234,6 +2260,18 @@ export async function linkIssue(req: any): Promise<PluginResponse> {
   }
   const rv = await review.get(rid)
   const currentRoundNo = rv ? ((rv as any).round_no || 1) : 1
+  // 整改项：已提交评审意见的非决议人不可再关联整改工作项
+  if (linkType === 'remediation' && rv && linked_by) {
+    const isPublisher = await isPublisherRole(rv, linked_by)
+    if (!isPublisher) {
+      let allRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+      if (allRvrs.length === 0) allRvrs = jsonArr((rv as any).reviewers_json || '[]')
+      const me = allRvrs.find((r: any) => r.reviewer_uuid === linked_by)
+      if (me && me.submitted_at > 0 && (me.round_no || 1) === currentRoundNo) {
+        return { body: { error: '已提交评审意见，不可再关联整改工作项' }, statusCode: 400 }
+      }
+    }
+  }
   const key = `${rid}_li_${issue_uuid}`
   await linkedIssue.set(key, {
     review_uuid: rid, issue_uuid,
@@ -2279,6 +2317,23 @@ export async function createIssue(req: any): Promise<PluginResponse> {
   } = b
   if (!title) {
     return { body: { error: '缺少 title' }, statusCode: 400 }
+  }
+
+  // 已提交评审意见的非决议人不可再创建整改工作项
+  {
+    const linkedBy = (b as any).linked_by || assignee_uuid || rv.creator_uuid || ''
+    if (linkedBy) {
+      const isPublisher = await isPublisherRole(rv, linkedBy)
+      if (!isPublisher) {
+        const _ciRoundNo = (rv as any).round_no || 1
+        let allRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+        if (allRvrs.length === 0) allRvrs = jsonArr((rv as any).reviewers_json || '[]')
+        const me = allRvrs.find((r: any) => r.reviewer_uuid === linkedBy)
+        if (me && me.submitted_at > 0 && (me.round_no || 1) === _ciRoundNo) {
+          return { body: { error: '已提交评审意见，不可再创建整改工作项' }, statusCode: 400 }
+        }
+      }
+    }
   }
 
   // 解析项目真实 UUID
@@ -2715,6 +2770,11 @@ export async function checkChecklist(req: any): Promise<PluginResponse> {
   }
   const myReviewer = snapReviewers.find((r: any) => r.reviewer_uuid === reviewer_uuid)
   if (!myReviewer) return { body: { error: '你不是本评审的评审人' }, statusCode: 403 }
+  // 已提交评审意见的评审人不可再操作 checklist
+  const _chkRoundNo = (rv as any).round_no || 1
+  if (myReviewer.submitted_at > 0 && (myReviewer.round_no || 1) === _chkRoundNo) {
+    return { body: { error: '已提交评审意见，不可再修改 Checklist' }, statusCode: 400 }
+  }
   // 决议发布角色不可操作 checklist（按 review_type 规则配置判断）
   const _rvType = (rv as any).review_type || 'dcp'
   const _rule = await getResolutionRuleByType(_rvType)

@@ -726,6 +726,17 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  if (opinionForm.conclusion !== 'pass' && !opinionForm.opinion_summary.trim()) {
  setOpinionMsg('结论为「有条件通过」或「不通过」时，必须填写评审意见'); return
  }
+ // Checklist 前端预检：当前角色所有项必须已勾选
+ {
+   const myChecklistItems = (data.checklist || []).filter((c: any) => c.role_name === myRole)
+   if (myChecklistItems.length > 0) {
+     const unchecked = myChecklistItems.filter((c: any) => !c.status || c.status === 'unchecked')
+     if (unchecked.length > 0) {
+       const names = unchecked.map((c: any) => c.item_text || c.template_id).join('、')
+       setOpinionMsg(`请先完成所有 Checklist 勾选后再提交，未勾选：${names}`); return
+     }
+   }
+ }
  setOpinionMsg('')
  setSubmittingOpinion(true)
  try {
@@ -907,12 +918,14 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  // 回退：后端 createIssue（会尝试多条内部路径，失败返回 fallback_url）
  try {
  await callApi(`/dcp/review/${rv.review_uuid}/create-issue`, 'POST', {
- title: createIssueForm.title,
- project_uuid: createIssueForm.project_uuid,
- issue_type_scope_uuid: scopeUuid,
- issue_type_uuid: typeUuid,
- assignee_uuid: createIssueForm.assignee_uuid || currentUser.uuid || '',
- ones_origin: window.location.origin,
+   title: createIssueForm.title,
+   project_uuid: createIssueForm.project_uuid,
+   issue_type_scope_uuid: scopeUuid,
+   issue_type_uuid: typeUuid,
+   assignee_uuid: createIssueForm.assignee_uuid || currentUser.uuid || '',
+   linked_by: currentUser.uuid || '',
+   linked_by_name: currentUser.name || '',
+   ones_origin: window.location.origin,
  })
  const firstType = issueTypes[0] || ({} as any)
  setCreateIssueForm({
@@ -1015,13 +1028,14 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
 
  {/* Checklist */}
  <ChecklistPanel
- checklist={data.checklist || []}
- currentUser={currentUser}
- myRole={myRole}
- isPublisher={canPublish}
- reviewUuid={rv.review_uuid}
- status={rv.effective_state || rv.review_state || rv.status}
- onRefresh={onRefresh}
+  checklist={data.checklist || []}
+  currentUser={currentUser}
+  myRole={myRole}
+  isPublisher={canPublish}
+  reviewUuid={rv.review_uuid}
+  status={rv.effective_state || rv.review_state || rv.status}
+  alreadySubmitted={alreadySubmitted}
+  onRefresh={onRefresh}
  />
 
  {/* 评审意见 — 决议模式下不展示，决议人无需填写普通评审意见 */}
@@ -1382,6 +1396,12 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  </tbody>
  </table>}
  <div style={{ marginTop: 16, borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
+ {alreadySubmitted ? (
+   <div style={{ padding: '12px', textAlign: 'center', fontSize: 13, color: '#999' }}>
+     已提交评审意见，不可再创建整改项
+   </div>
+ ) : (
+ <>
  <h4 style={{ ...S.sectionTitle, fontSize: 13 }}>+ 创建整改项</h4>
  {createIssueMsg && <div style={{ marginBottom: 8, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: createIssueFallback ? '#fff7e6' : '#fff2f0', color: createIssueFallback ? '#faad14' : '#cf1322' }}>{createIssueMsg}
  {createIssueFallback && (
@@ -1440,6 +1460,8 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  </button>
  </div>
  </div>
+ </>
+ )}
  </div>
  </div>
  {previewLoading && (
@@ -1483,12 +1505,15 @@ const ChecklistPanel: React.FC<{
  isPublisher: boolean
  reviewUuid: string
  status: string
+ alreadySubmitted: boolean
  onRefresh: () => void
-}> = ({ checklist, currentUser, myRole, isPublisher, reviewUuid, status, onRefresh }) => {
+}> = ({ checklist, currentUser, myRole, isPublisher, reviewUuid, status, alreadySubmitted, onRefresh }) => {
  const [errMsg, setErrMsg] = useState('')
  // 使用 effective_state 精确判断：仅 reviewing / re_reviewing 可勾选
  const _statusLower = (status || '').toLowerCase()
  const isDone = _statusLower !== 'reviewing' && _statusLower !== 're_reviewing'
+ // 已提交评审意见后，checklist 也变为只读
+ const isReadOnly = isDone || alreadySubmitted
  const [expandedRoles, setExpandedRoles] = useState<string[]>([])
  const [toggling, setToggling] = useState<string>('')
 
@@ -1551,14 +1576,14 @@ const ChecklistPanel: React.FC<{
  const { pass, total } = stats(myItems)
  return (
  <div style={{ ...S.card, marginBottom: 16 }}>
- <h4 style={S.sectionTitle}>我的 Checklist <span style={{ fontSize: 12, fontWeight: 400, color: '#666', marginLeft: 8 }}>达标率: {pass}/{total}</span></h4>
+ <h4 style={S.sectionTitle}>我的 Checklist <span style={{ fontSize: 12, fontWeight: 400, color: '#666', marginLeft: 8 }}>达标率: {pass}/{total}</span>{alreadySubmitted && <span style={{ fontSize: 12, fontWeight: 400, color: '#999', marginLeft: 8 }}>（已提交评审意见，不可修改）</span>}</h4>
  {errMsg && <div style={{ marginBottom: 8, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: '#fff2f0', color: '#cf1322' }}>{errMsg}</div>}
  {myItems.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map((item: any) => {
  const s = item.status || 'unchecked'
  const isToggling = toggling === item.template_id
  return (
- <div key={item.template_id} style={{ display: 'flex', alignItems: 'center', padding: '4px 0', gap: 8, cursor: isDone ? 'default' : 'pointer', opacity: isToggling ? 0.5 : 1 }}
- onClick={() => { if (!isDone) toggleCheck(item.template_id, nextStatus(s)) }}>
+ <div key={item.template_id} style={{ display: 'flex', alignItems: 'center', padding: '4px 0', gap: 8, cursor: isReadOnly ? 'default' : 'pointer', opacity: isToggling ? 0.5 : 1 }}
+ onClick={() => { if (!isReadOnly) toggleCheck(item.template_id, nextStatus(s)) }}>
  <span style={{ fontSize: 16, color: statusColor[s] }}>{statusDisplay[s]}</span>
  <span style={{ fontSize: 13, flex: 1 }}>{item.item_text}</span>
  </div>
