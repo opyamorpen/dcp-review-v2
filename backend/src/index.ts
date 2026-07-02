@@ -74,6 +74,14 @@ function makeUuid(): string {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
 }
 
+// 获取当前轮次的最新决议（多轮复审时只取当前轮次，多条时取 published_at 最大）
+function getLatestResolution(resolutions: any[], roundNo: number): any | null {
+  const current = resolutions.filter((r: any) => (r.round_no || 1) === roundNo)
+  if (current.length === 0) return null
+  current.sort((a: any, b: any) => (b.published_at || 0) - (a.published_at || 0))
+  return current[0]
+}
+
 // ---- 通知 ---- 
 
 const NOTIFY_WAY_MAP: Record<string, NotifyWay> = {
@@ -1172,7 +1180,7 @@ export async function listReviewsByProject(req: any): Promise<PluginResponse> {
     const reviewsMats = await qAll(matItem, (v: any) => v.review_uuid === r.review_uuid)
     const matSubmitted = reviewsMats.filter((m: any) => !!m.file_data).length
     const resolutions = await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)
-    const res = resolutions[0] || null
+    const res = getLatestResolution(resolutions, (r as any).round_no || 1)
     const final_conclusion = res?.final_conclusion || ''
 
     // 决议状态展示字段
@@ -1222,7 +1230,7 @@ export async function listReviewsByProject(req: any): Promise<PluginResponse> {
   const passedPhases: string[] = []
   for (const r of allProjReviews) {
     const res = await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)
-    const fc = res[0]?.final_conclusion || ''
+    const fc = getLatestResolution(res, (r as any).round_no || 1)?.final_conclusion || ''
     if (fc === 'pass' || fc === 'conditional_pass') {
       passedPhases.push(r.phase_code)
     }
@@ -1436,7 +1444,7 @@ export async function startReview(req: any): Promise<PluginResponse> {
     for (const r of projReviews) {
       if (!deps.includes(r.phase_code)) continue
       const res = await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)
-      const fc = res[0]?.final_conclusion || ''
+      const fc = getLatestResolution(res, (r as any).round_no || 1)?.final_conclusion || ''
       if (fc === 'pass' || fc === 'conditional_pass') {
         passedPhases.add(r.phase_code)
       }
@@ -1564,6 +1572,7 @@ export async function startReview(req: any): Promise<PluginResponse> {
 // 撤回评审（reviewing → draft）
 // ============================================================
 export async function recallReview(req: any): Promise<PluginResponse> {
+ try {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
   const { operator_uuid, reason } = b
@@ -1593,7 +1602,10 @@ export async function recallReview(req: any): Promise<PluginResponse> {
     return { body: { error: '仅评审发起人可以撤回评审' }, statusCode: 403 }
   }
 
-  const hasResolution = (await qAll(resolution, (v: any) => v.review_uuid === rid)).length > 0
+  // 仅检查当前轮次是否有决议（多轮复审时旧轮次的决议不阻止撤回）
+  const _recallRoundNo = (rv as any).round_no || 1
+  const _recallAllRes = await qAll(resolution, (v: any) => v.review_uuid === rid)
+  const hasResolution = _recallAllRes.some((res: any) => (res.round_no || 1) === _recallRoundNo)
   if (hasResolution) {
     return { body: { error: '评审已发布决议，不可撤回' }, statusCode: 400 }
   }
@@ -1643,6 +1655,16 @@ export async function recallReview(req: any): Promise<PluginResponse> {
     `评审已撤回，回到草稿状态。原因：${reason || '未填写'}`)
 
   return { body: { ok: true, status: 'draft', review_state: 'canceled' } }
+ } catch (e: any) {
+   let errDetail = ''
+   try {
+     if (e instanceof Error) errDetail = e.message
+     else if (typeof e === 'string') errDetail = e
+     else errDetail = JSON.stringify(e)
+   } catch { errDetail = String(e) }
+   Logger.error(`[DCP] recallReview error: ${errDetail}`, e?.stack || '')
+   return { body: { error: `撤回失败: ${errDetail}` }, statusCode: 500 }
+ }
 }
 
 // ============================================================
@@ -1668,7 +1690,9 @@ export async function updateReviewBasicInfo(req: any): Promise<PluginResponse> {
     return { body: { error: '当前状态不可修改会议时间' }, statusCode: 400 }
   }
 
-  const hasResolution = (await qAll(resolution, (v: any) => v.review_uuid === rid)).length > 0
+  const _ubInfoRoundNo = (rv as any).round_no || 1
+  const _ubInfoAllRes = await qAll(resolution, (v: any) => v.review_uuid === rid)
+  const hasResolution = _ubInfoAllRes.some((res: any) => (res.round_no || 1) === _ubInfoRoundNo)
   if (hasResolution) {
     return { body: { error: '评审已发布决议，不可修改会议时间' }, statusCode: 400 }
   }
