@@ -759,6 +759,27 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  setResolving(true)
  setResolutionMsg('')
  try {
+ // 发布决议前先同步整改项状态，确保快照记录的状态是最新的
+ const remediationIssues = (data.remediation_issues || []).filter((iss: any) => iss.link_type === 'remediation')
+ if (remediationIssues.length > 0 && teamUUID) {
+   const syncItems: any[] = []
+   for (const iss of remediationIssues) {
+     try {
+       const res = await fetch(`/project/api/project/team/${teamUUID}/tasks/${iss.issue_uuid}`, { credentials: 'include' })
+       if (res.ok) {
+         const taskData = await res.json()
+         const statusName = taskData?.status?.name || taskData?.data?.status?.name || ''
+         const statusId = taskData?.status?.id || taskData?.data?.status?.id || ''
+         const category = taskData?.status?.category ?? taskData?.data?.status?.category
+         const isDone = typeof category === 'number' ? category === 2 : undefined
+         if (statusName) syncItems.push({ issue_uuid: iss.issue_uuid, status_name: statusName, status_id: statusId, is_done: isDone })
+       }
+     } catch {}
+   }
+   if (syncItems.length > 0) {
+     await callApi(`/dcp/review/${rv.review_uuid}/remediation/sync`, 'POST', { items: syncItems })
+   }
+ }
  await callApi(`/dcp/review/${rv.review_uuid}/publish-resolution`, 'POST', {
  final_conclusion: resolutionForm.final_conclusion,
  condition_notes: resolutionForm.condition_notes,

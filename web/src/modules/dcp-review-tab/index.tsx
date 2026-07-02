@@ -791,11 +791,44 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   }
 
   // ---- 整改闭环 ----
+  // 前端浏览器 fetch 查询工作项实时状态 → 调后端 sync API 更新实体存储
+  // 绕过 OPFetch 不可达问题
+  async function syncRemediationFromBrowser(): Promise<boolean> {
+    const remediationIssues = (data.remediation_issues || data.linked_issues || []).filter((iss: any) => iss.link_type === 'remediation')
+    if (remediationIssues.length === 0) return false
+    const tuid = getTeamUUID()
+    if (!tuid) return false
+
+    const syncItems: any[] = []
+    for (const iss of remediationIssues) {
+      try {
+        const res = await fetch(`/project/api/project/team/${tuid}/tasks/${iss.issue_uuid}`, { credentials: 'include' })
+        if (res.ok) {
+          const taskData = await res.json()
+          const statusName = taskData?.status?.name || taskData?.data?.status?.name || ''
+          const statusId = taskData?.status?.id || taskData?.data?.status?.id || ''
+          const category = taskData?.status?.category ?? taskData?.data?.status?.category
+          // category: 2 = 已完成
+          const isDone = typeof category === 'number' ? category === 2 : undefined
+          if (statusName) {
+            syncItems.push({ issue_uuid: iss.issue_uuid, status_name: statusName, status_id: statusId, is_done: isDone })
+          }
+        }
+      } catch {}
+    }
+
+    if (syncItems.length > 0) {
+      await api.syncRemediationStatus(rv.review_uuid, syncItems)
+      return true
+    }
+    return false
+  }
+
   async function handleRefreshRemediation() {
     setRemediationRefreshing(true)
     setRemediationMsg('')
     try {
-      await api.refreshRemediationStatus(rv.review_uuid)
+      await syncRemediationFromBrowser()
       onRefresh()
     } catch (e: any) { setRemediationMsg(e.message || '刷新失败') }
     finally { setRemediationRefreshing(false) }
@@ -1158,7 +1191,13 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       {/* 页签 */}
       <div style={S.tabs}>
         {TABS.map(t => (
-          <button key={t.key} style={S.tab(activeTab === t.key)} onClick={() => setActiveTab(t.key)}>
+          <button key={t.key} style={S.tab(activeTab === t.key)} onClick={() => {
+            setActiveTab(t.key)
+            if (t.key === 'remediation') {
+              // 进入工作项 tab 时自动同步整改项状态
+              syncRemediationFromBrowser().then((synced) => { if (synced) onRefresh() }).catch(() => {})
+            }
+          }}>
             {t.label}{t.badge != null && t.badge > 0 ? ` (${t.badge})` : ''}
           </button>
         ))}

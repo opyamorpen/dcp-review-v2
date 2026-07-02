@@ -3415,7 +3415,7 @@ export async function getRemediationIssues(req: any): Promise<PluginResponse> {
   }
 }
 
-// POST /review/:review_uuid/remediation/refresh — 手动刷新整改项状态（兜底）
+// POST /review/:review_uuid/remediation/refresh — 手动刷新整改项状态（兜底，OPFetch 不可达时无效）
 export async function refreshRemediationStatus(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
@@ -3449,6 +3449,91 @@ export async function refreshRemediationStatus(req: any): Promise<PluginResponse
 
   return {
     body: {
+      items: updated,
+      total: updated.length,
+      done_count: updated.filter((v: any) => v.issue_status === 'done').length,
+      all_done: allDone,
+    }
+  }
+}
+
+// POST /review/:review_uuid/remediation/sync — 前端浏览器查询工作项实时状态后，批量同步到实体存储
+// 绕过 OPFetch 不可达问题：前端用浏览器 fetch 查 tasks API，将结果传给后端更新 linkedIssue
+export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
+  const tuid = getParam(req, 'team_uuid')
+  const b = (req.body || {}) as any
+  const items: Array<{ issue_uuid: string; status_name: string; status_id?: string; is_done?: boolean }> = b.items || []
+  if (!Array.isArray(items) || items.length === 0) {
+    return { body: { error: '缺少 items 数组' }, statusCode: 400 }
+  }
+
+  // 读取当前所有整改关联项
+  const allLinked = await qAll(linkedIssue,
+    (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+
+  let updatedCount = 0
+  for (const item of items) {
+    const linked = allLinked.find((l: any) => l.issue_uuid === item.issue_uuid)
+    if (!linked) continue
+
+    // 判断是否已完成：前端传 is_done 优先，否则用关键词兜底
+    let isDone = false
+    if (typeof item.is_done === 'boolean') {
+      isDone = item.is_done
+    } else if (tuid && item.status_id) {
+      isDone = await checkStatusIsDone(tuid, item.status_id, item.status_name || '')
+    } else {
+      const doneKeywords = ['完成', '关闭', '已关闭', 'done', 'complete', 'closed', '已交付', 'resolved', '已解决']
+      isDone = doneKeywords.some(k => (item.status_name || '').toLowerCase().includes(k.toLowerCase()))
+    }
+
+    const newStatus = isDone ? 'done' : (item.status_name || 'open')
+    if (linked.issue_status !== newStatus) {
+      await linkedIssue.set(linked._key, {
+        ...linked,
+        issue_status: newStatus,
+      })
+      updatedCount++
+    }
+  }
+
+  // 返回更新后的数据
+  const updated = await qAll(linkedIssue,
+    (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+  const allDone = updated.length > 0 && updated.every((v: any) => v.issue_status === 'done')
+
+  // 全部整改项刚完成时通知决议人 + 评审发起人
+  if (allDone && updatedCount > 0) {
+    try {
+      const rv = await review.get(rid)
+      if (rv) {
+        const resolutions = await qAll(resolution, (v: any) => v.review_uuid === rid)
+        const publisherUUID = resolutions[0]?.published_by || ''
+        const creatorUUID = (rv as any).creator_uuid || ''
+        const notifyTargets = [...new Set([publisherUUID, creatorUUID].filter(Boolean))] as string[]
+        const notCfg = await getNotifyConfig()
+        if (notCfg.enabled && notifyTargets.length > 0) {
+          const phaseName = (rv as any).phase_code || ''
+          const title = (rv as any).review_title || phaseName
+          sendNotification(
+            `${((rv as any).review_type || 'dcp').toUpperCase()}评审整改完成 — ${phaseName}`,
+            `「${title}」的 ${updated.length} 个整改项已全部完成，请确认。`,
+            (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
+            notifyTargets,
+          )
+        }
+      }
+    } catch (e: any) {
+      Logger.error(`[DCP] syncRemediationStatus notify error: ${e?.message || e}`)
+    }
+  }
+
+  return {
+    body: {
+      ok: true,
+      updated_count: updatedCount,
       items: updated,
       total: updated.length,
       done_count: updated.filter((v: any) => v.issue_status === 'done').length,

@@ -144,5 +144,7 @@ export const getReviewRounds = (uuid: string) => callApi(`/dcp/review/${uuid}/ro
 // ---- 整改闭环 ----
 export const getRemediationIssues = (uuid: string) => callApi(`/dcp/review/${uuid}/remediation`)
 export const refreshRemediationStatus = (uuid: string) => callApi(`/dcp/review/${uuid}/remediation/refresh`, { method: 'POST' })
+export const syncRemediationStatus = (uuid: string, items: any[]) =>
+  callApi(`/dcp/review/${uuid}/remediation/sync`, { method: 'POST', body: JSON.stringify({ items }) })
 export const confirmRemediation = (uuid: string, data: { publisher_uuid: string; next_action: 'complete' | 're_review' }) =>
   callApi(`/dcp/review/${uuid}/remediation/confirm`, { method: 'POST', body: JSON.stringify(data) })
