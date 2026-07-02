@@ -923,7 +923,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  issue_number: task.display_id || task.uuid,
  issue_title: createIssueForm.title,
  issue_type: task.issue_type_name || typeUuid,
- issue_status: 'open',
+ issue_status: '',
  linked_by: currentUser.uuid || '',
  linked_by_name: currentUser.name || '',
  link_type: 'remediation',

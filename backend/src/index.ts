@@ -2443,7 +2443,7 @@ export async function createIssue(req: any): Promise<PluginResponse> {
       issue_number: issueNumber,
       issue_title: title,
       issue_type: issue_type_uuid || typeScopeUuid || '',
-      issue_status: 'open',
+      issue_status: '',
       linked_by: b.linked_by || assignee_uuid || rv.creator_uuid || '',
       linked_by_name: b.linked_by_name || '',
       linked_at: Date.now(),
@@ -3313,9 +3313,10 @@ function isIssueStatusDone(status: string): boolean {
   return DONE_KEYWORDS.some(k => (status || '').toLowerCase().includes(k.toLowerCase()))
 }
 
-// 兼容旧数据：旧版本把已完成状态名替换为 'done' 存入实体，读取时还原为「已完成」
+// 兼容旧数据：旧版本把已完成状态名替换为 'done' 或硬编码 'open'，读取时还原
 function normalizeIssueStatus(status: string): string {
   if (status === 'done') return '已完成'
+  if (status === 'open') return ''
   return status || ''
 }
 
@@ -3508,7 +3509,7 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
       isDone = doneKeywords.some(k => (item.status_name || '').toLowerCase().includes(k.toLowerCase()))
     }
 
-    const newStatus = item.status_name || 'open'
+    const newStatus = item.status_name || ''
     if (linked.issue_status !== newStatus) {
       // 必须剥离 _key，否则 ONES 实体 API 报 EntityDataValueAttrNotFound → 500
       const { _key, ...rest } = linked

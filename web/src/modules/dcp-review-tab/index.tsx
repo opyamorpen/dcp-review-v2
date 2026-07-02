@@ -898,14 +898,15 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
             issue_number: task.display_id || task.uuid,
             issue_title: createRemediationForm.title,
             issue_type: remediationIssueType || '',
-            issue_status: 'open',
+            issue_status: '',
             linked_by: currentUser.uuid || '',
             linked_by_name: currentUser.name || '',
             link_type: 'remediation',
           })
           setCreateRemediationForm({ title: '' })
           setShowCreateRemediation(false)
-          onRefresh()
+          // 关联后立即同步真实状态
+          syncRemediationFromBrowser().then(() => onRefresh()).catch(() => onRefresh())
           return
         }
       }
@@ -926,14 +927,15 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
         issue_number: linkRemediationForm.issue_number.trim(),
         issue_title: linkRemediationForm.issue_title.trim(),
         issue_type: remediationIssueType || '',
-        issue_status: 'open',
+        issue_status: '',
         linked_by: currentUser.uuid || '',
         linked_by_name: currentUser.name || '',
         link_type: 'remediation',
       })
       setLinkRemediationForm({ issue_uuid: '', issue_number: '', issue_title: '' })
       setShowLinkRemediation(false)
-      onRefresh()
+      // 关联后立即同步真实状态
+      syncRemediationFromBrowser().then(() => onRefresh()).catch(() => onRefresh())
     } catch (e: any) { setRemediationMsg(e.message || '关联失败') }
     finally { setLinkingRemediation(false) }
   }
@@ -943,6 +945,11 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     setPublishing(true)
     setMsg('')
     try {
+      // 发布决议前先同步整改项状态，确保快照记录真实状态名
+      const remediationIssues = (data.remediation_issues || data.linked_issues || []).filter((iss: any) => iss.link_type === 'remediation')
+      if (remediationIssues.length > 0) {
+        await syncRemediationFromBrowser()
+      }
       await api.publishResolution(rv.review_uuid, {
         final_conclusion: resolutionForm.final_conclusion,
         condition_notes: resolutionForm.condition_notes,
