@@ -1800,8 +1800,12 @@ function SnapshotSections({ res, defaultExpanded }: { res: any; defaultExpanded:
                 <tbody>
                   {checklist.map((item: any, i: number) => (
                     <tr key={i}>
-                      <td style={{ ...S.td, textAlign: 'center' }}>{item.status === 'checked' ? '✅' : item.status === 'unchecked' ? '☐' : '—'}</td>
-                      <td style={S.td}>{item.title || item.content || '-'}</td>
+                      <td style={{ ...S.td, textAlign: 'center' }}>
+                        <span style={{ color: item.status === 'pass' ? '#52c41a' : item.status === 'fail' ? '#ff4d4f' : '#999' }}>
+                          {item.status === 'pass' ? '✅' : item.status === 'fail' ? '❌' : '☐'}
+                        </span>
+                      </td>
+                      <td style={S.td}>{item.item_text || '-'}</td>
                       <td style={S.td}>{item.checked_by_name || item.checked_by || '-'}</td>
                       <td style={S.td}>{item.checked_at ? new Date(item.checked_at).toLocaleString('zh-CN') : '-'}</td>
                     </tr>
