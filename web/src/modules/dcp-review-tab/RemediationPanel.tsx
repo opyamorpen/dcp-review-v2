@@ -120,34 +120,15 @@ export const RemediationPanel: React.FC<{
             </div>
           )}
 
-          {/* 整改完成确认 */}
-          {isRemediationPhase && allDone && isPublisher && !props.showRemediationConfirm && (
-            <div style={{ marginTop: 16, padding: 12, background: '#f6ffed', borderRadius: 8, border: '1px solid #b7eb8f' }}>
-              <div style={{ fontSize: 13, marginBottom: 8 }}>所有整改项已完成，请确认整改结果：</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button style={{ ...S.btn(true), background: '#52c41a' }} onClick={() => props.onConfirmRemediation('complete')} disabled={props.remediationConfirming}>
-                  {props.remediationConfirming ? '处理中…' : '确认完成，评审通过'}
-                </button>
-                <button style={{ ...S.btn(true), background: '#2f54eb' }} onClick={() => props.onSetShowRemediationConfirm(true)}>发起复审</button>
-              </div>
+          {isRemediationPhase && allDone && (
+            <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#f6ffed', color: '#52c41a', border: '1px solid #b7eb8f' }}>
+              所有整改项已完成，可在评审单顶部发起复审
             </div>
           )}
 
           {isRemediationPhase && !allDone && (
             <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff7e6', color: '#fa8c16' }}>
-              部分整改项尚未完成，完成后可确认闭环或发起复审
-            </div>
-          )}
-
-          {props.showRemediationConfirm && (
-            <div style={{ marginTop: 16, padding: 12, background: '#e6f4ff', borderRadius: 8, border: '1px solid #91caff' }}>
-              <div style={{ fontSize: 13, marginBottom: 8 }}>确认发起复审？评审人提交状态将重置，进入新一轮评审。</div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button style={{ ...S.btn(true), background: '#2f54eb' }} onClick={() => props.onConfirmRemediation('re_review')} disabled={props.remediationConfirming}>
-                  {props.remediationConfirming ? '处理中…' : '确认发起复审'}
-                </button>
-                <button style={S.btn(false)} onClick={() => { props.onSetShowRemediationConfirm(false); props.onSetRemediationMsg('') }}>取消</button>
-              </div>
+              部分整改项尚未完成，完成后可在评审单顶部发起复审
             </div>
           )}
         </>

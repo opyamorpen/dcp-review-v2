@@ -3556,11 +3556,10 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
   const tuid = getParam(req, 'team_uuid')
   const b = (req.body || {}) as any
   const { publisher_uuid, next_action } = b
-  // next_action: 'complete' | 're_review'
-
+  // next_action: 're_review'（整改完成后只能发起复审，不能直接通过）
   if (!publisher_uuid) return { body: { error: '缺少 publisher_uuid' }, statusCode: 400 }
-  if (!next_action || !['complete', 're_review'].includes(next_action)) {
-    return { body: { error: 'next_action 必须为 complete 或 re_review' }, statusCode: 400 }
+  if (!next_action || next_action !== 're_review') {
+    return { body: { error: '整改完成后只能发起复审，请使用评审单顶部的「开始复审」按钮' }, statusCode: 400 }
   }
 
   const rv = await review.get(rid)
@@ -3652,11 +3651,9 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
     })
   }
 
-  // 3. 评审单状态流转
-  const targetState = next_action === 're_review' ? 're_reviewing' : 'completed'
-  const reason = next_action === 're_review'
-    ? '整改完成，发起复审'
-    : '整改完成，评审通过'
+  // 3. 评审单状态流转（整改完成后只能发起复审）
+  const targetState = 're_reviewing'
+  const reason = '整改完成，发起复审'
 
   // 如果是复审，round_no + 1，重置 reviewers_json 中评审人 submitted_at
   let newRoundNo = (rv as any).round_no || 1
