@@ -1846,18 +1846,54 @@ function SnapshotSections({ res, defaultExpanded }: { res: any; defaultExpanded:
 const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data, onRefresh }) => {
   const res = data.resolution
   const supps = data.supplements || []
+  const allResolutions = data.resolutions || []
+  const _rNo = data.review?.round_no || 1
+  const prevResolutions = allResolutions.filter((r: any) => (r.round_no || 1) < _rNo)
+    .sort((a: any, b: any) => (b.round_no || 1) - (a.round_no || 1))
 
   if (!res) {
     const total = data.reviewers?.length || 0
     const done = data.reviewers?.filter((r: any) => r.submitted_at > 0).length || 0
+    // 有历史轮次决议时，展示历史决议而非"尚未发布决议"
+    if (prevResolutions.length === 0) {
+      return (
+        <div>
+          <h4 style={S.sectionTitle}>决议快照</h4>
+          <div style={{ ...S.card, textAlign: 'center', color: '#999', padding: 40 }}>
+            <div style={{ fontSize: 14, marginBottom: 8 }}>尚未发布决议</div>
+            <div style={{ fontSize: 12 }}>
+              评审进度: {done}/{total} 已提交（全部提交后由决议发布人发布决议）
+            </div>
+          </div>
+        </div>
+      )
+    }
+    // 当前轮次无决议，展示历史轮次决议
     return (
       <div>
-        <h4 style={S.sectionTitle}>决议快照</h4>
-        <div style={{ ...S.card, textAlign: 'center', color: '#999', padding: 40 }}>
-          <div style={{ fontSize: 14, marginBottom: 8 }}>尚未发布决议</div>
-          <div style={{ fontSize: 12 }}>
-            评审进度: {done}/{total} 已提交（全部提交后由决议发布人发布决议）
+        <div style={{ ...S.card, textAlign: 'center', color: '#999', padding: '16px 40px', marginBottom: 16 }}>
+          <div style={{ fontSize: 13 }}>当前轮次尚未发布决议</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>
+            评审进度: {done}/{total} 已提交
           </div>
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <h4 style={S.sectionTitle}>历史决议（{prevResolutions.length}轮）</h4>
+          {prevResolutions.map((pr: any, i: number) => (
+            <div key={i} style={{ ...S.card, borderLeft: '3px solid #bfbfbf', background: '#fafafa', marginBottom: 8 }}>
+              <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
+                第{pr.round_no || 1}轮 | 快照: <code>{pr.snapshot_number}</code> | {pr.published_at ? new Date(pr.published_at).toLocaleString('zh-CN') : '-'}
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>
+                决议: <span style={{ color: pr.final_conclusion === 'pass' ? '#52c41a' : pr.final_conclusion === 'conditional_pass' ? '#faad14' : '#ff4d4f' }}>
+                  {CONCLUSION_LABELS[pr.final_conclusion] || pr.final_conclusion}
+                </span>
+              </div>
+              {pr.condition_notes && <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: '#666', marginTop: 4 }}>{pr.condition_notes}</div>}
+              {pr.published_by_name && <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>发布人: {pr.published_by_name}</div>}
+              <SnapshotSections res={pr} defaultExpanded={false} />
+            </div>
+          ))}
         </div>
       </div>
     )
@@ -1886,11 +1922,7 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
         <SnapshotSections res={res} defaultExpanded={true} />
       </div>
       {/* 历史决议（多轮） */}
-      {(data.resolutions || []).length > 1 && (() => {
-        const _rNo = data.review?.round_no || 1
-        const prevResolutions = (data.resolutions || []).filter((r: any) => (r.round_no || 1) < _rNo)
-        if (prevResolutions.length === 0) return null
-        return (
+      {prevResolutions.length > 0 && (
           <div style={{ marginBottom: 16 }}>
             <h4 style={S.sectionTitle}>历史决议（{prevResolutions.length}轮）</h4>
             {prevResolutions.map((pr: any, i: number) => (
@@ -1909,8 +1941,7 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
               </div>
             ))}
           </div>
-        )
-      })()}
+      )}
       {/* 补充/纠偏说明 */}
       {supps.length > 0 && (
         <div style={{ marginBottom: 16 }}>
