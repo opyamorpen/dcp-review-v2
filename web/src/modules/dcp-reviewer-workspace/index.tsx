@@ -492,14 +492,16 @@ const ReviewerWorkspace: React.FC<{
  const [copyToast, setCopyToast] = useState('')
  const [resolutionRule, setResolutionRule] = useState<any>(null)
  const [configRoles, setConfigRoles] = useState<any[]>([])
+ const [remediationIssueType, setRemediationIssueType] = useState('')
 
- // 加载当前评审类型的决议规则配置 + 角色列表
+ // 加载当前评审类型的决议规则配置 + 角色列表 + 整改项类型
  const _rvReviewType = (rv.review_type || 'dcp')
  useEffect(() => {
    callApi('/dcp/config').then((c: any) => {
      const rules = c.resolution_rule_config || {}
      setResolutionRule(rules[_rvReviewType] || null)
      setConfigRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === _rvReviewType))
+     setRemediationIssueType(c.config?.remediation_issue_type || '')
    }).catch(() => {})
  }, [_rvReviewType])
  const canPublish = !!resolutionRule && (resolutionRule.publisher?.role || '') === myRole
@@ -824,12 +826,24 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  setCreateIssueMsg('请填写标题和项目')
  return
  }
+ if (!createIssueForm.assignee_uuid) {
+ setCreateIssueMsg('请选择负责人')
+ return
+ }
  setCreating(true)
  setCreateIssueMsg('')
  setCreateIssueFallback('')
 
- const scopeUuid = createIssueForm.issue_type_scope_uuid
- const typeUuid = createIssueForm.issue_type_id
+ // 当配置了整改项类型时，从 issueTypes 中按名称匹配 scope_uuid/issue_type_uuid
+ let scopeUuid = createIssueForm.issue_type_scope_uuid
+ let typeUuid = createIssueForm.issue_type_id
+ if (remediationIssueType && issueTypes.length > 0) {
+   const matched = issueTypes.find((t: any) => t.name === remediationIssueType)
+   if (matched) {
+     scopeUuid = matched.scope_uuid
+     typeUuid = matched.issue_type_uuid
+   }
+ }
 
  try {
  // 方式一：前端 fetch 直调 tasks/add3
@@ -848,6 +862,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  { field_uuid: 'field001', value: createIssueForm.title },
  { field_uuid: 'field006', value: createIssueForm.project_uuid },
  { field_uuid: 'field007', value: typeUuid },
+ { field_uuid: 'field008', value: createIssueForm.assignee_uuid },
  ],
  }],
  }),
@@ -1386,20 +1401,26 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  <input style={{ ...S.input, width: 200 }} value={createIssueForm.title} onChange={e => setCreateIssueForm({ ...createIssueForm, title: e.target.value })} placeholder="工作项标题" />
  </div>
  <div style={S.formGroup}>
- <label style={S.label}>类型</label>
+ <label style={S.label}>类型{remediationIssueType ? '' : ''}</label>
  {loadingTypes ? <span style={{ fontSize: 12, color: '#999' }}>加载中…</span> :
- <SearchableTypePicker
- types={issueTypes.length > 0 ? issueTypes : [
- { scope_uuid: '', issue_type_uuid: '', name: '任务' },
- { scope_uuid: '', issue_type_uuid: '', name: '需求' },
- { scope_uuid: '', issue_type_uuid: '', name: '缺陷' },
- { scope_uuid: '', issue_type_uuid: '', name: '子任务' },
- ]}
- value={createIssueForm.issue_type_scope_uuid}
- onChange={(scopeUuid, issueTypeUuid) => setCreateIssueForm({
- ...createIssueForm, issue_type_scope_uuid: scopeUuid, issue_type_id: issueTypeUuid,
- })}
- />
+ remediationIssueType ? (
+   // 配置了整改项类型：锁定显示，不可修改
+   <input style={{ ...S.input, background: '#f5f5f5', color: '#666' }} value={remediationIssueType} disabled />
+ ) : (
+   // 未配置：允许选择
+   <SearchableTypePicker
+     types={issueTypes.length > 0 ? issueTypes : [
+       { scope_uuid: '', issue_type_uuid: '', name: '任务' },
+       { scope_uuid: '', issue_type_uuid: '', name: '需求' },
+       { scope_uuid: '', issue_type_uuid: '', name: '缺陷' },
+       { scope_uuid: '', issue_type_uuid: '', name: '子任务' },
+     ]}
+     value={createIssueForm.issue_type_scope_uuid}
+     onChange={(scopeUuid, issueTypeUuid) => setCreateIssueForm({
+       ...createIssueForm, issue_type_scope_uuid: scopeUuid, issue_type_id: issueTypeUuid,
+     })}
+   />
+ )
  }
  </div>
  <div style={S.formGroup}>
@@ -1407,8 +1428,8 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  <input style={{ ...S.input, background: '#f5f5f5', color: '#666' }} value={projectDisplayName} disabled placeholder="当前项目" />
  </div>
  <div style={S.formGroup}>
- <label style={S.label}>负责人</label>
- <UserPicker value={createIssueForm.assignee_uuid} onChange={u => setCreateIssueForm({ ...createIssueForm, assignee_uuid: u.uuid })} placeholder="搜索用户…" />
+ <label style={S.label}>负责人 *</label>
+ <UserPicker value={createIssueForm.assignee_uuid} onChange={u => setCreateIssueForm({ ...createIssueForm, assignee_uuid: u.uuid })} placeholder="搜索用户…（必填）" />
  </div>
  <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
  <button style={{ ...S.btn(true), marginBottom: 0 }} onClick={handleCreateIssue} disabled={creating}>

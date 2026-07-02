@@ -2708,7 +2708,11 @@ export async function checkChecklist(req: any): Promise<PluginResponse> {
 
   // 权限：操作人必须是对应角色的评审人，且不是决议发布角色
   const item = cl[idx]
-  const snapReviewers = jsonArr((rv as any).reviewers_json || '[]')
+  // 优先从 rvReviewer 实体查询，兜底从 reviewers_json 快照读取
+  let snapReviewers = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+  if (snapReviewers.length === 0) {
+    snapReviewers = jsonArr((rv as any).reviewers_json || '[]')
+  }
   const myReviewer = snapReviewers.find((r: any) => r.reviewer_uuid === reviewer_uuid)
   if (!myReviewer) return { body: { error: '你不是本评审的评审人' }, statusCode: 403 }
   // 决议发布角色不可操作 checklist（按 review_type 规则配置判断）
