@@ -11,6 +11,10 @@ import type { PluginResponse } from '@ones-op/node-types'
 import { OPFetch, getOpenApiToken } from '@ones-op/fetch'
 import { Notify, NotifyWay } from '@ones-op/node-ability'
 
+// TaskEventHandler 函数必须在入口文件 re-export，否则 npx op packup 不会打包进 dist/index.js
+// 导致 ONES 运行时找不到 handler 函数，所有工作项变更返回 500
+export { taskPreAction, taskActionDone } from './task-event-handler'
+
 // ============================================================
 // 实体引用
 // ============================================================
@@ -3083,9 +3087,48 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
     return { body: { error: '仅评审发起人可触发状态流转' }, statusCode: 403 }
   }
 
-  // 进入 re_reviewing 时重置评审人提交状态（开启新轮次）
+  // 进入 re_reviewing 时：校验整改项全部完成 + 重置评审人提交状态（开启新轮次）
   let extra: Record<string, any> = {}
   if (target_state === 're_reviewing') {
+    // 校验：所有整改项必须已完成
+    const remediationItems = await qAll(linkedIssue,
+      (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+    if (remediationItems.length > 0) {
+      // 实时同步整改项状态
+      const tuid = getParam(req, 'team_uuid')
+      if (tuid) {
+        for (const item of remediationItems) {
+          try {
+            const taskRes = await OPFetch(
+              `/project/api/project/team/${tuid}/tasks/${item.issue_uuid}`,
+              { method: 'GET', teamUUID: tuid }
+            ) as any
+            const statusName = taskRes?.status?.name || taskRes?.data?.status?.name || taskRes?.status || ''
+            const statusID = taskRes?.status?.id || taskRes?.data?.status?.id || taskRes?.status_uuid || ''
+            if (statusName) {
+              const isDone = await checkStatusIsDone(tuid, statusID, statusName)
+              if (item.issue_status !== (isDone ? 'done' : statusName)) {
+                await linkedIssue.set(item._key, { ...item, issue_status: isDone ? 'done' : statusName })
+              }
+            }
+          } catch {}
+        }
+      }
+      // 重新读取同步后的整改项
+      const syncedItems = await qAll(linkedIssue,
+        (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+      const notDone = syncedItems.filter((v: any) => v.issue_status !== 'done')
+      if (notDone.length > 0) {
+        return {
+          body: {
+            error: `仍有 ${notDone.length} 个整改项未完成，不可发起复审`,
+            pending: notDone.map((v: any) => v.issue_title || v.issue_uuid),
+          },
+          statusCode: 400,
+        }
+      }
+    }
+
     const newRoundNo = ((rv as any).round_no || 1) + 1
     // 优先查实体，兜底快照
     const snapRvrs = jsonArr((rv as any).reviewers_json || '[]')
