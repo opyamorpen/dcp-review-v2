@@ -1243,16 +1243,14 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
 {/* 决议（发布人可见）— 仅决议人/决议模式可见 */}
 {(() => {
 if (!canPublish && !isResolutionMode) return null
-// 当前轮次无决议时，回退到上一轮决议快照（复审场景）
-const res = data.resolution || _prevResolution || null
-const _isPrevRound = !data.resolution && !!_prevResolution
+const res = data.resolution
  const votes: any[] = res?.based_on_votes ? (() => { try { return JSON.parse(res.based_on_votes) } catch { return [] } })() : []
 
  if (res) {
  // 已发布：展示决议
  return (
  <div style={{ ...S.card, background: '#f6ffed', borderLeft: '4px solid #52c41a' }}>
- <h4 style={S.sectionTitle}>决议快照 {res.snapshot_number ? `(${res.snapshot_number})` : ''}{_isPrevRound ? ` — 第${res.round_no || 1}轮` : ''}</h4>
+ <h4 style={S.sectionTitle}>决议快照 {res.snapshot_number ? `(${res.snapshot_number})` : ''}</h4>
  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
  <div style={S.formGroup}>
  <label style={S.label}>最终结论</label>
