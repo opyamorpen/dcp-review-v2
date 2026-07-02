@@ -910,6 +910,14 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  setCreating(false)
  return
  }
+ // HTTP 200 但 tasks 为空 → 检查 bad_tasks 中的错误
+ if (data?.bad_tasks?.length > 0) {
+ const bt = data.bad_tasks[0]
+ const permMsg = bt.errcode || bt.type || bt.code || '创建失败'
+ setCreateIssueMsg(`创建失败: ${permMsg}${bt.permission ? `（${bt.permission}）` : ''}`)
+ setCreating(false)
+ return
+ }
  }
 
  // tasks/add3 返回了非预期格式，尝试解析
