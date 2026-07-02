@@ -1696,23 +1696,146 @@ const LinkedIssuesPanel: React.FC<{ data: any; projectUuid: string; projectKey: 
 }
 
 // ============================================================
+// 快照子区块（评审意见/指标/Checklist/整改项）— 当前轮次和历史轮次共用
+// ============================================================
+const RISK_LABELS: Record<string, string> = { low: '低', medium: '中', high: '高' }
+
+function SnapshotSections({ res, defaultExpanded }: { res: any; defaultExpanded: boolean }) {
+  const votes: any[] = res.based_on_votes ? (() => { try { return JSON.parse(res.based_on_votes) } catch { return [] } })() : []
+  const indicators: any[] = res.snapshot_indicators ? (() => { try { return JSON.parse(res.snapshot_indicators) } catch { return [] } })() : []
+  const checklist: any[] = res.snapshot_checklist ? (() => { try { return JSON.parse(res.snapshot_checklist) } catch { return [] } })() : []
+  const issues: any[] = res.snapshot_issues ? (() => { try { return JSON.parse(res.snapshot_issues) } catch { return [] } })() : []
+  const [expanded, setExpanded] = useState(defaultExpanded)
+
+  const sectionBtn = (label: string, count: number): React.CSSProperties => ({
+    display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+    fontSize: 13, fontWeight: 600, color: '#333', marginBottom: 4,
+  })
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={sectionBtn('', 0)} onClick={() => setExpanded(!expanded)}>
+        <span style={{ fontSize: 11, color: '#999' }}>{expanded ? '▾' : '▸'}</span>
+        <span>快照详情</span>
+        <span style={{ fontSize: 11, color: '#999', fontWeight: 400 }}>
+          （评审意见 {votes.length} · 指标 {indicators.length} · Checklist {checklist.length} · 整改项 {issues.length}）
+        </span>
+      </div>
+
+      {expanded && (
+        <div style={{ marginLeft: 4 }}>
+          {/* 评审意见快照 */}
+          {votes.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 12, color: '#666', marginBottom: 4 }}>评审意见</div>
+              <table style={S.table}>
+                <thead><tr>
+                  <th style={S.th}>角色</th><th style={{ ...S.th, width: 100, textAlign: 'center' }}>结论</th>
+                  <th style={{ ...S.th, width: 60, textAlign: 'center' }}>风险</th><th style={S.th}>意见摘要</th>
+                </tr></thead>
+                <tbody>
+                  {votes.map((v: any, i: number) => (
+                    <tr key={i}>
+                      <td style={S.td}>{v.role_name}</td>
+                      <td style={{ ...S.td, textAlign: 'center' }}>
+                        <span style={{ color: v.conclusion === 'pass' ? '#52c41a' : v.conclusion === 'conditional_pass' ? '#faad14' : '#ff4d4f' }}>
+                          {CONCLUSION_LABELS[v.conclusion] || (v.submitted_at > 0 ? v.conclusion : '—')}
+                        </span>
+                      </td>
+                      <td style={{ ...S.td, textAlign: 'center' }}>{RISK_LABELS[v.risk_level] || '中'}</td>
+                      <td style={{ ...S.td, fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.opinion_summary || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* 指标快照 */}
+          {indicators.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 12, color: '#666', marginBottom: 4 }}>评审指标</div>
+              <table style={S.table}>
+                <thead><tr>
+                  <th style={S.th}>指标名称</th><th style={{ ...S.th, width: 80, textAlign: 'center' }}>当前值</th>
+                  <th style={{ ...S.th, width: 60, textAlign: 'center' }}>风险</th><th style={S.th}>备注</th>
+                </tr></thead>
+                <tbody>
+                  {indicators.map((ind: any, i: number) => (
+                    <tr key={i}>
+                      <td style={S.td}>{ind.indicator_name || ind.template_id}</td>
+                      <td style={{ ...S.td, textAlign: 'center' }}>{ind.current_value ?? 0}</td>
+                      <td style={{ ...S.td, textAlign: 'center' }}>
+                        <span style={{ color: ind.risk_color === 'green' ? '#52c41a' : ind.risk_color === 'yellow' ? '#faad14' : '#ff4d4f' }}>
+                          {ind.risk_color === 'green' ? '🟢' : ind.risk_color === 'yellow' ? '🟡' : '🔴'}
+                        </span>
+                      </td>
+                      <td style={{ ...S.td, fontSize: 12 }}>{ind.notes || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Checklist 快照 */}
+          {checklist.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 12, color: '#666', marginBottom: 4 }}>Checklist</div>
+              <table style={S.table}>
+                <thead><tr>
+                  <th style={{ ...S.th, width: 50, textAlign: 'center' }}>状态</th><th style={S.th}>检查项</th>
+                  <th style={{ ...S.th, width: 80 }}>检查人</th><th style={{ ...S.th, width: 120 }}>检查时间</th>
+                </tr></thead>
+                <tbody>
+                  {checklist.map((item: any, i: number) => (
+                    <tr key={i}>
+                      <td style={{ ...S.td, textAlign: 'center' }}>{item.status === 'checked' ? '✅' : item.status === 'unchecked' ? '☐' : '—'}</td>
+                      <td style={S.td}>{item.title || item.content || '-'}</td>
+                      <td style={S.td}>{item.checked_by_name || item.checked_by || '-'}</td>
+                      <td style={S.td}>{item.checked_at ? new Date(item.checked_at).toLocaleString('zh-CN') : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* 整改工作项快照 */}
+          {issues.length > 0 && (
+            <div style={{ marginBottom: 4 }}>
+              <div style={{ fontWeight: 600, fontSize: 12, color: '#666', marginBottom: 4 }}>整改工作项</div>
+              <table style={S.table}>
+                <thead><tr>
+                  <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>状态</th>
+                  <th style={{ ...S.th, width: 80 }}>创建者</th><th style={{ ...S.th, width: 60, textAlign: 'center' }}>锁定</th>
+                </tr></thead>
+                <tbody>
+                  {issues.map((iss: any, i: number) => (
+                    <tr key={i}>
+                      <td style={S.td}><code style={{ fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 8)}</code></td>
+                      <td style={S.td}>{iss.issue_title || '-'}</td>
+                      <td style={S.td}>{iss.issue_status === 'done' ? '✅ 已完成' : iss.issue_status || '-'}</td>
+                      <td style={S.td}>{iss.linked_by_name || '-'}</td>
+                      <td style={{ ...S.td, textAlign: 'center' }}>{iss.locked === 'locked' ? '🔒' : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================
 // 决议快照面板
 // ============================================================
 const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data, onRefresh }) => {
   const res = data.resolution
   const supps = data.supplements || []
-  const [suppForm, setSuppForm] = useState({ note_type: 'supplement', note_title: '', note_content: '' })
-  const [suppMsg, setSuppMsg] = useState('')
-
-  async function handleAddSupp() {
-    if (!suppForm.note_title || !suppForm.note_content) { setSuppMsg('请填写标题和内容'); return }
-    setSuppMsg('')
-    try {
-      await api.addSupplement(data.review.review_uuid, suppForm)
-      setSuppForm({ note_type: 'supplement', note_title: '', note_content: '' })
-      onRefresh()
-    } catch (e: any) { setSuppMsg(e.message) }
-  }
 
   if (!res) {
     const total = data.reviewers?.length || 0
@@ -1729,8 +1852,6 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
       </div>
     )
   }
-
-  const votes: any[] = res.based_on_votes ? (() => { try { return JSON.parse(res.based_on_votes) } catch { return [] } })() : []
 
   return (
     <div>
@@ -1751,31 +1872,8 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
         {res.condition_notes && <div style={{ whiteSpace: 'pre-wrap', fontSize: 13, background: '#fff', padding: 12, borderRadius: 4, border: '1px solid #e8e8e8' }}>{res.condition_notes}</div>}
         {res.published_by_name && <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>发布人: {res.published_by_name}</div>}
 
-        {/* 投票快照 */}
-        {votes.length > 0 && (
-          <div style={{ marginTop: 16 }}>
-            <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>评审意见快照</div>
-            <table style={S.table}>
-              <thead><tr>
-                <th style={S.th}>角色</th><th style={S.th}>投票</th><th style={S.th}>风险</th><th style={S.th}>意见</th>
-              </tr></thead>
-              <tbody>
-                {votes.map((v: any, i: number) => (
-                  <tr key={i}>
-                    <td style={S.td}>{v.role_name}</td>
-                    <td style={S.td}>
-                      <span style={{ color: v.conclusion === 'pass' ? '#52c41a' : v.conclusion === 'conditional_pass' ? '#faad14' : '#ff4d4f' }}>
-                        {v.conclusion === 'pass' ? '✅ 通过' : v.conclusion === 'conditional_pass' ? '⚠️ 有条件通过' : v.submitted_at > 0 ? '❌ 不通过' : '— 未投票'}
-                      </span>
-                    </td>
-                    <td style={S.td}>{v.risk_level === 'low' ? '低' : v.risk_level === 'high' ? '高' : '中'}</td>
-                    <td style={{ ...S.td, fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.opinion_summary || '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {/* 快照详情：评审意见 + 指标 + Checklist + 整改项 */}
+        <SnapshotSections res={res} defaultExpanded={true} />
       </div>
       {/* 历史决议（多轮） */}
       {(data.resolutions || []).length > 1 && (() => {
@@ -1785,22 +1883,21 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
         return (
           <div style={{ marginBottom: 16 }}>
             <h4 style={S.sectionTitle}>历史决议（{prevResolutions.length}轮）</h4>
-            {prevResolutions.map((pr: any, i: number) => {
-              const prVotes: any[] = pr.based_on_votes ? (() => { try { return JSON.parse(pr.based_on_votes) } catch { return [] } })() : []
-              return (
-                <div key={i} style={{ ...S.card, borderLeft: '3px solid #bfbfbf', background: '#fafafa', marginBottom: 8 }}>
-                  <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
-                    第{pr.round_no || 1}轮 | 快照: <code>{pr.snapshot_number}</code> | {pr.published_at ? new Date(pr.published_at).toLocaleString('zh-CN') : '-'}
-                  </div>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>
-                    决议: <span style={{ color: pr.final_conclusion === 'pass' ? '#52c41a' : pr.final_conclusion === 'conditional_pass' ? '#faad14' : '#ff4d4f' }}>
-                      {pr.final_conclusion === 'pass' ? '✅ 通过' : pr.final_conclusion === 'conditional_pass' ? '⚠️ 有条件通过' : pr.final_conclusion === 'rework' ? '🔧 返工' : '❌ 驳回'}
-                    </span>
-                  </div>
-                  {pr.condition_notes && <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: '#666', marginTop: 4 }}>{pr.condition_notes}</div>}
+            {prevResolutions.map((pr: any, i: number) => (
+              <div key={i} style={{ ...S.card, borderLeft: '3px solid #bfbfbf', background: '#fafafa', marginBottom: 8 }}>
+                <div style={{ fontSize: 12, color: '#999', marginBottom: 4 }}>
+                  第{pr.round_no || 1}轮 | 快照: <code>{pr.snapshot_number}</code> | {pr.published_at ? new Date(pr.published_at).toLocaleString('zh-CN') : '-'}
                 </div>
-              )
-            })}
+                <div style={{ fontSize: 14, fontWeight: 600 }}>
+                  决议: <span style={{ color: pr.final_conclusion === 'pass' ? '#52c41a' : pr.final_conclusion === 'conditional_pass' ? '#faad14' : '#ff4d4f' }}>
+                    {CONCLUSION_LABELS[pr.final_conclusion] || pr.final_conclusion}
+                  </span>
+                </div>
+                {pr.condition_notes && <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: '#666', marginTop: 4 }}>{pr.condition_notes}</div>}
+                {pr.published_by_name && <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>发布人: {pr.published_by_name}</div>}
+                <SnapshotSections res={pr} defaultExpanded={false} />
+              </div>
+            ))}
           </div>
         )
       })()}
@@ -1821,26 +1918,6 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
           ))}
         </div>
       )}
-      {/* 添加补充说明 */}
-      <div style={{ ...S.card, background: '#fafafa' }}>
-        <h4 style={S.sectionTitle}>追加说明</h4>
-        {suppMsg && <div style={{ marginBottom: 8, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: '#fff2f0', color: '#cf1322' }}>{suppMsg}</div>}
-        <div style={S.formGroup}>
-          <label style={S.label}>类型</label>
-          <select style={{ ...S.select, width: 200 }} value={suppForm.note_type} onChange={e => setSuppForm({ ...suppForm, note_type: e.target.value })}>
-            <option value="supplement">补充说明</option><option value="rectification">纠偏说明</option>
-          </select>
-        </div>
-        <div style={S.formGroup}>
-          <label style={S.label}>标题 *</label>
-          <input style={S.input} value={suppForm.note_title} onChange={e => setSuppForm({ ...suppForm, note_title: e.target.value })} placeholder="说明标题" />
-        </div>
-        <div style={S.formGroup}>
-          <label style={S.label}>内容 *</label>
-          <textarea style={S.textarea} rows={3} value={suppForm.note_content} onChange={e => setSuppForm({ ...suppForm, note_content: e.target.value })} placeholder="说明内容…" />
-        </div>
-        <button style={S.btn(true)} onClick={handleAddSupp}>提交</button>
-      </div>
     </div>
   )
 }

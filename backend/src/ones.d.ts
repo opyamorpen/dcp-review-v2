@@ -155,6 +155,9 @@ declare var ONESEntities: {
             published_by_name?: string;
             published_at?: number;
             round_no?: number;
+            snapshot_indicators?: string;
+            snapshot_checklist?: string;
+            snapshot_issues?: string;
         };
         indexes: null;
     };
