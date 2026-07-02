@@ -749,6 +749,47 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  finally { setSubmittingOpinion(false) }
  }
 
+ // 同步整改项状态：浏览器 GraphQL 查询工作项实时状态 → 调后端 sync API 更新实体存储
+ async function syncRemediationFromBrowser(): Promise<boolean> {
+ const remediationIssues = (data.remediation_issues || []).filter((iss: any) => iss.link_type === 'remediation')
+ if (remediationIssues.length === 0 || !teamUUID) return false
+ const remUuids = remediationIssues.map((iss: any) => iss.issue_uuid).filter(Boolean)
+ if (remUuids.length === 0) return false
+ const syncItems: any[] = []
+ try {
+ const gqlRes = await fetch(`/project/api/project/team/${teamUUID}/items/graphql`, {
+ method: 'POST', credentials: 'include',
+ headers: { 'Content-Type': 'application/json' },
+ body: JSON.stringify({
+ query: `query findTasks($filter: TasksFilter) { tasks(filter: $filter) { uuid status { uuid name category } } }`,
+ variables: { filter: { uuid_in: remUuids } },
+ }),
+ })
+ if (gqlRes.ok) {
+ const gqlData = await gqlRes.json()
+ const tasks = gqlData?.data?.tasks || []
+ for (const task of tasks) {
+ const statusName = task?.status?.name || ''
+ const statusId = task?.status?.uuid || ''
+ const category = task?.status?.category
+ const isDone = typeof category === 'string'
+ ? category === 'done' || category === 'closed'
+ : typeof category === 'number' ? category === 2 : undefined
+ if (statusName) syncItems.push({ issue_uuid: task.uuid, status_name: statusName, status_id: statusId, is_done: isDone })
+ }
+ }
+ } catch {}
+ if (syncItems.length === 0) return false
+ await callApi(`/dcp/review/${rv.review_uuid}/remediation/sync`, 'POST', { items: syncItems })
+ return true
+ }
+
+ // 进入评审单时自动同步整改项状态
+ useEffect(() => {
+ syncRemediationFromBrowser().then((synced) => { if (synced) onRefresh() }).catch(() => {})
+ // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [rv.review_uuid])
+
  async function handlePublishResolution() {
  if (!resolutionForm.final_conclusion) {
  setResolutionMsg('请选择决议结果'); return
@@ -760,37 +801,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  setResolutionMsg('')
  try {
  // 发布决议前先同步整改项状态，确保快照记录的状态是最新的
- const remediationIssues = (data.remediation_issues || []).filter((iss: any) => iss.link_type === 'remediation')
- if (remediationIssues.length > 0 && teamUUID) {
-   const remUuids = remediationIssues.map((iss: any) => iss.issue_uuid).filter(Boolean)
-   const syncItems: any[] = []
-   try {
-     const gqlRes = await fetch(`/project/api/project/team/${teamUUID}/items/graphql`, {
-       method: 'POST', credentials: 'include',
-       headers: { 'Content-Type': 'application/json' },
-       body: JSON.stringify({
-         query: `query findTasks($filter: TasksFilter) { tasks(filter: $filter) { uuid status { uuid name category } } }`,
-         variables: { filter: { uuid_in: remUuids } },
-       }),
-     })
-     if (gqlRes.ok) {
-       const gqlData = await gqlRes.json()
-       const tasks = gqlData?.data?.tasks || []
-       for (const task of tasks) {
-         const statusName = task?.status?.name || ''
-         const statusId = task?.status?.uuid || ''
-         const category = task?.status?.category
-         const isDone = typeof category === 'string'
-           ? category === 'done' || category === 'closed'
-           : typeof category === 'number' ? category === 2 : undefined
-         if (statusName) syncItems.push({ issue_uuid: task.uuid, status_name: statusName, status_id: statusId, is_done: isDone })
-       }
-     }
-   } catch {}
-   if (syncItems.length > 0) {
-     await callApi(`/dcp/review/${rv.review_uuid}/remediation/sync`, 'POST', { items: syncItems })
-   }
- }
+ await syncRemediationFromBrowser()
  await callApi(`/dcp/review/${rv.review_uuid}/publish-resolution`, 'POST', {
  final_conclusion: resolutionForm.final_conclusion,
  condition_notes: resolutionForm.condition_notes,

@@ -842,6 +842,15 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     return true
   }
 
+  // 进入评审单时自动同步整改项状态（确保状态名是真实值，不依赖用户点击"工作项"tab）
+  useEffect(() => {
+    const remediationIssues = (data.remediation_issues || data.linked_issues || []).filter((iss: any) => iss.link_type === 'remediation')
+    if (remediationIssues.length > 0) {
+      syncRemediationFromBrowser().then((synced) => { if (synced) onRefresh() }).catch(() => {})
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rv.review_uuid])
+
   async function handleRefreshRemediation() {
     setRemediationRefreshing(true)
     setRemediationMsg('')
