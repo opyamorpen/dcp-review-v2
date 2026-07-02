@@ -762,20 +762,31 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  // 发布决议前先同步整改项状态，确保快照记录的状态是最新的
  const remediationIssues = (data.remediation_issues || []).filter((iss: any) => iss.link_type === 'remediation')
  if (remediationIssues.length > 0 && teamUUID) {
+   const remUuids = remediationIssues.map((iss: any) => iss.issue_uuid).filter(Boolean)
    const syncItems: any[] = []
-   for (const iss of remediationIssues) {
-     try {
-       const res = await fetch(`/project/api/project/team/${teamUUID}/tasks/${iss.issue_uuid}`, { credentials: 'include' })
-       if (res.ok) {
-         const taskData = await res.json()
-         const statusName = taskData?.status?.name || taskData?.data?.status?.name || ''
-         const statusId = taskData?.status?.id || taskData?.data?.status?.id || ''
-         const category = taskData?.status?.category ?? taskData?.data?.status?.category
-         const isDone = typeof category === 'number' ? category === 2 : undefined
-         if (statusName) syncItems.push({ issue_uuid: iss.issue_uuid, status_name: statusName, status_id: statusId, is_done: isDone })
+   try {
+     const gqlRes = await fetch(`/project/api/project/team/${teamUUID}/items/graphql`, {
+       method: 'POST', credentials: 'include',
+       headers: { 'Content-Type': 'application/json' },
+       body: JSON.stringify({
+         query: `query findTasks($filter: TasksFilter) { tasks(filter: $filter) { uuid status { uuid name category } } }`,
+         variables: { filter: { uuid_in: remUuids } },
+       }),
+     })
+     if (gqlRes.ok) {
+       const gqlData = await gqlRes.json()
+       const tasks = gqlData?.data?.tasks || []
+       for (const task of tasks) {
+         const statusName = task?.status?.name || ''
+         const statusId = task?.status?.uuid || ''
+         const category = task?.status?.category
+         const isDone = typeof category === 'string'
+           ? category === 'done' || category === 'closed'
+           : typeof category === 'number' ? category === 2 : undefined
+         if (statusName) syncItems.push({ issue_uuid: task.uuid, status_name: statusName, status_id: statusId, is_done: isDone })
        }
-     } catch {}
-   }
+     }
+   } catch {}
    if (syncItems.length > 0) {
      await callApi(`/dcp/review/${rv.review_uuid}/remediation/sync`, 'POST', { items: syncItems })
    }

@@ -779,6 +779,8 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     setTransitioning(true)
     setMsg('')
     try {
+      // 先同步整改项状态，确保后端读到最新状态
+      await syncRemediationFromBrowser()
       await api.transitionReview(rv.review_uuid, {
         target_state: 're_reviewing',
         operator_uuid: currentUser.uuid,
@@ -791,37 +793,53 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   }
 
   // ---- 整改闭环 ----
-  // 前端浏览器 fetch 查询工作项实时状态 → 调后端 sync API 更新实体存储
-  // 绕过 OPFetch 不可达问题
+  // 前端浏览器 GraphQL 查询工作项实时状态 → 调后端 sync API 更新实体存储
+  // tasks/{uuid} 返回 404，改用 items/graphql（HAR 验证可用）
   async function syncRemediationFromBrowser(): Promise<boolean> {
     const remediationIssues = (data.remediation_issues || data.linked_issues || []).filter((iss: any) => iss.link_type === 'remediation')
     if (remediationIssues.length === 0) return false
     const tuid = getTeamUUID()
     if (!tuid) return false
 
+    const uuids = remediationIssues.map((iss: any) => iss.issue_uuid).filter(Boolean)
+    if (uuids.length === 0) return false
+
+    // GraphQL 批量查询工作项状态（含 category）
+    // category: "done" = 已完成（HAR batch_query 验证为字符串类型）
     const syncItems: any[] = []
-    for (const iss of remediationIssues) {
-      try {
-        const res = await fetch(`/project/api/project/team/${tuid}/tasks/${iss.issue_uuid}`, { credentials: 'include' })
-        if (res.ok) {
-          const taskData = await res.json()
-          const statusName = taskData?.status?.name || taskData?.data?.status?.name || ''
-          const statusId = taskData?.status?.id || taskData?.data?.status?.id || ''
-          const category = taskData?.status?.category ?? taskData?.data?.status?.category
-          // category: 2 = 已完成
-          const isDone = typeof category === 'number' ? category === 2 : undefined
+    try {
+      const gqlRes = await fetch(`/project/api/project/team/${tuid}/items/graphql`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: `query findTasks($filter: TasksFilter) { tasks(filter: $filter) { uuid status { uuid name category } } }`,
+          variables: { filter: { uuid_in: uuids } },
+        }),
+      })
+      if (gqlRes.ok) {
+        const gqlData = await gqlRes.json()
+        const tasks = gqlData?.data?.tasks || []
+        for (const task of tasks) {
+          const statusName = task?.status?.name || ''
+          const statusId = task?.status?.uuid || ''
+          const category = task?.status?.category
+          // category 是字符串: "to_do"/"in_progress"/"done"
+          const isDone = typeof category === 'string'
+            ? category === 'done' || category === 'closed'
+            : typeof category === 'number'
+              ? category === 2
+              : undefined
           if (statusName) {
-            syncItems.push({ issue_uuid: iss.issue_uuid, status_name: statusName, status_id: statusId, is_done: isDone })
+            syncItems.push({ issue_uuid: task.uuid, status_name: statusName, status_id: statusId, is_done: isDone })
           }
         }
-      } catch {}
-    }
+      }
+    } catch {}
 
-    if (syncItems.length > 0) {
-      await api.syncRemediationStatus(rv.review_uuid, syncItems)
-      return true
-    }
-    return false
+    if (syncItems.length === 0) return false
+    await api.syncRemediationStatus(rv.review_uuid, syncItems)
+    return true
   }
 
   async function handleRefreshRemediation() {
@@ -838,6 +856,8 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     setRemediationConfirming(true)
     setRemediationMsg('')
     try {
+      // 先同步整改项状态，确保后端读到最新状态
+      await syncRemediationFromBrowser()
       await api.confirmRemediation(rv.review_uuid, {
         publisher_uuid: currentUser.uuid || '',
         next_action: nextAction,
