@@ -3460,6 +3460,7 @@ export async function refreshRemediationStatus(req: any): Promise<PluginResponse
 // POST /review/:review_uuid/remediation/sync — 前端浏览器查询工作项实时状态后，批量同步到实体存储
 // 绕过 OPFetch 不可达问题：前端用浏览器 fetch 查 tasks API，将结果传给后端更新 linkedIssue
 export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
+  try {
   const rid = getParam(req, 'review_uuid')
   if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
   const tuid = getParam(req, 'team_uuid')
@@ -3491,8 +3492,10 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
 
     const newStatus = isDone ? 'done' : (item.status_name || 'open')
     if (linked.issue_status !== newStatus) {
+      // 必须剥离 _key，否则 ONES 实体 API 报 EntityDataValueAttrNotFound → 500
+      const { _key, ...rest } = linked
       await linkedIssue.set(linked._key, {
-        ...linked,
+        ...rest,
         issue_status: newStatus,
       })
       updatedCount++
@@ -3539,6 +3542,10 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
       done_count: updated.filter((v: any) => v.issue_status === 'done').length,
       all_done: allDone,
     }
+  }
+  } catch (e: any) {
+    Logger.error(`[DCP] syncRemediationStatus error: ${e?.message || e}`, e?.stack || '')
+    return { body: { error: `同步失败: ${e?.message || e}` }, statusCode: 500 }
   }
 }
 
