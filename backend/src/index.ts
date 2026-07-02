@@ -1620,15 +1620,16 @@ export async function recallReview(req: any): Promise<PluginResponse> {
   const allReviewers = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
   const resetReviewers: any[] = []
   for (const r of allReviewers) {
+    const { _key, ...rest } = r
     const reset = {
-      ...r,
+      ...rest,
       conclusion: '',
       risk_level: 'medium',
       opinion_summary: '',
       submitted_at: 0,
     }
     await rvReviewer.set(r._key, reset)
-    resetReviewers.push(reset)
+    resetReviewers.push({ _key: r._key, ...reset })
   }
 
   // 重置 checklist
@@ -3008,8 +3009,9 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
     extra.reviewers_json = JSON.stringify(resetReviewers)
     // 同步重置 rvReviewer 实体（submitOpinion / listMyReviews 优先读实体）
     for (const r of entityRvrs) {
+      const { _key, ...rest } = r
       await rvReviewer.set(r._key, {
-        ...r,
+        ...rest,
         round_no: newRoundNo,
         submitted_at: 0,
         conclusion: '',
@@ -3422,8 +3424,9 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
     // 同步重置 rvReviewer 实体（submitOpinion / listMyReviews 优先读实体）
     const entityRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
     for (const r of entityRvrs) {
+      const { _key, ...rest } = r
       await rvReviewer.set(r._key, {
-        ...r,
+        ...rest,
         round_no: newRoundNo,
         submitted_at: 0,
         conclusion: '',
