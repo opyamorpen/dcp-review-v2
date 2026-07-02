@@ -3162,6 +3162,33 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
   await writeAudit(rid, operator_uuid, '状态流转', target_state,
     `${currentState} → ${target_state}${reason ? ' | ' + reason : ''}`)
 
+  // 进入复审时通知评审人（与 startReview 一致）
+  if (target_state === 're_reviewing') {
+    const notCfg = await getNotifyConfig()
+    if (notCfg.enabled && notCfg.on_review_start) {
+      const _rvType = (rv as any).review_type || 'dcp'
+      const _rule = await getResolutionRuleByType(_rvType)
+      const _pubRole = getPublisherRole(_rule)
+      const _snapRvrs = jsonArr((rv as any).reviewers_json || '[]')
+      const _entityRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+      const _allRvrs = _entityRvrs.length > 0 ? _entityRvrs : _snapRvrs
+      const reviewerUuids = _allRvrs
+        .filter((r: any) => r.role_name !== _pubRole)
+        .map((r: any) => r.reviewer_uuid)
+        .filter(Boolean)
+      if (reviewerUuids.length > 0) {
+        const phaseName = (rv as any).phase_code || ''
+        const reviewTitle = (rv as any).review_title || '评审'
+        sendNotification(
+          `复审通知 — ${phaseName}`,
+          `「${phaseName} ${reviewTitle}」已进入第${stateFields.round_no}轮复审，请前往评审工作台重新提交评审意见。`,
+          `${(rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : ''}`,
+          reviewerUuids,
+        )
+      }
+    }
+  }
+
   return {
     body: {
       ok: true,
@@ -3595,6 +3622,30 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
         `「${(rv as any).review_title || (rv as any).phase_code}」整改已由决议人确认完成，关联工作项已锁定。`,
         (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
         ownerUUIDs,
+      )
+    }
+  }
+
+  // 5. 复审时通知评审人重新提交评审意见
+  if (next_action === 're_review' && notCfg.enabled && notCfg.on_review_start) {
+    const _rvType = (rv as any).review_type || 'dcp'
+    const _rule = await getResolutionRuleByType(_rvType)
+    const _pubRole = getPublisherRole(_rule)
+    const _snapRvrs = jsonArr(newReviewersJson)
+    const _entityRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+    const _allRvrs = _entityRvrs.length > 0 ? _entityRvrs : _snapRvrs
+    const reviewerUuids = _allRvrs
+      .filter((r: any) => r.role_name !== _pubRole)
+      .map((r: any) => r.reviewer_uuid)
+      .filter(Boolean)
+    if (reviewerUuids.length > 0) {
+      const phaseName = (rv as any).phase_code || ''
+      const reviewTitle = (rv as any).review_title || '评审'
+      sendNotification(
+        `复审通知 — ${phaseName}`,
+        `「${phaseName} ${reviewTitle}」整改已完成，进入第${newRoundNo}轮复审，请前往评审工作台重新提交评审意见。`,
+        (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
+        reviewerUuids,
       )
     }
   }
