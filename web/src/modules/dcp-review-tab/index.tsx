@@ -1888,7 +1888,7 @@ function SnapshotSections({ res, defaultExpanded }: { res: any; defaultExpanded:
                     <tr key={i}>
                       <td style={S.td}><code style={{ fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 8)}</code></td>
                       <td style={S.td}>{iss.issue_title || '-'}</td>
-                      <td style={S.td}>{iss.issue_status === 'done' ? '✅ 已完成' : iss.issue_status || '-'}</td>
+                      <td style={S.td}>{iss.issue_status || '-'}</td>
                       <td style={S.td}>{iss.linked_by_name || '-'}</td>
                       <td style={{ ...S.td, textAlign: 'center' }}>{iss.locked === 'locked' ? '🔒' : '-'}</td>
                     </tr>

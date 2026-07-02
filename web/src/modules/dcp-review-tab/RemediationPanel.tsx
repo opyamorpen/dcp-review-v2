@@ -12,12 +12,8 @@ const S = {
   tableWrap: { overflowX: 'auto' as any },
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  open: '待处理', in_progress: '进行中', done: '✅ 已完成', closed: '已关闭',
-}
-const STATUS_COLORS: Record<string, string> = {
-  open: '#faad14', in_progress: '#1677ff', done: '#52c41a', closed: '#999',
-}
+const STATUS_LABELS: Record<string, string> = {}
+const STATUS_COLORS: Record<string, string> = {}
 
 export const RemediationPanel: React.FC<{
   data: any
@@ -57,7 +53,6 @@ export const RemediationPanel: React.FC<{
 
   // 工作项列表（全部），用 badge 区分类型
   const issueRows = allIssues.map((iss: any, i: number) => {
-    const st = iss.issue_status || 'open'
     const isRemediation = iss.link_type === 'remediation'
     return (
       <tr key={i}>
@@ -65,7 +60,7 @@ export const RemediationPanel: React.FC<{
         <td style={S.td}>{iss.issue_title || '-'}</td>
         <td style={S.td}>{iss.issue_type || '-'}</td>
         <td style={S.td}>
-          <span style={{ color: STATUS_COLORS[st] || '#999' }}>{STATUS_LABELS[st] || st}</span>
+          <span style={{ color: '#666' }}>{iss.issue_status || '-'}</span>
         </td>
         <td style={S.td}>
           {isRemediation

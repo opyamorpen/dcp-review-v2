@@ -1142,7 +1142,7 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
     const _currentRoundNo = (rv as any).round_no || 1
     // 整改关联工作项
     const remediationIssues = issues.filter((v: any) => v.link_type === 'remediation')
-    const remediationAllDone = remediationIssues.length > 0 && remediationIssues.every((v: any) => v.issue_status === 'done')
+    const remediationAllDone = remediationIssues.length > 0 && remediationIssues.every((v: any) => isIssueStatusDone(v.issue_status))
     return { body: {
       review: { ...rvWithPhase, effective_state: _rvEffState, round_no: _currentRoundNo },
       materials: matsWithTpl,
@@ -3107,8 +3107,8 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
             const statusID = taskRes?.status?.id || taskRes?.data?.status?.id || taskRes?.status_uuid || ''
             if (statusName) {
               const isDone = await checkStatusIsDone(tuid, statusID, statusName)
-              if (item.issue_status !== (isDone ? 'done' : statusName)) {
-                await linkedIssue.set(item._key, { ...item, issue_status: isDone ? 'done' : statusName })
+              if (item.issue_status !== (statusName)) {
+                await linkedIssue.set(item._key, { ...item, issue_status: statusName })
               }
             }
           } catch {}
@@ -3117,7 +3117,7 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
       // 重新读取同步后的整改项
       const syncedItems = await qAll(linkedIssue,
         (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
-      const notDone = syncedItems.filter((v: any) => v.issue_status !== 'done')
+      const notDone = syncedItems.filter((v: any) => !isIssueStatusDone(v.issue_status))
       if (notDone.length > 0) {
         return {
           body: {
@@ -3303,6 +3303,12 @@ function parseEvent(payload: any) {
   }
 }
 
+// 判断 issue_status 值是否属于"已完成"类型（关键词匹配，不依赖 category）
+const DONE_KEYWORDS = ['完成', '关闭', '已关闭', 'done', 'complete', 'closed', '已交付', 'resolved', '已解决']
+function isIssueStatusDone(status: string): boolean {
+  return DONE_KEYWORDS.some(k => (status || '').toLowerCase().includes(k.toLowerCase()))
+}
+
 // 判断状态是否属于"已完成"类型（非状态名，是状态类型 category）
 async function checkStatusIsDone(teamUUID: string, statusID: string, statusName: string): Promise<boolean> {
   // 方式一：GraphQL 反查 status category
@@ -3349,7 +3355,7 @@ export async function onIssueStatusChanged(payload: any) {
     for (const item of items) {
       await linkedIssue.set(item._key, {
         ...item,
-        issue_status: isDone ? 'done' : (newStatus.name || ''),
+        issue_status: newStatus.name || '',
       })
     }
 
@@ -3358,7 +3364,7 @@ export async function onIssueStatusChanged(payload: any) {
       const rid = items[0].review_uuid
       const allRemediation = await qAll(linkedIssue,
         (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
-      const allDone = allRemediation.every((v: any) => v.issue_status === 'done')
+      const allDone = allRemediation.every((v: any) => isIssueStatusDone(v.issue_status))
 
       if (allDone) {
         // 通知决议人 + 评审发起人
@@ -3403,13 +3409,13 @@ export async function getRemediationIssues(req: any): Promise<PluginResponse> {
     (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
   items.sort((a: any, b: any) => (a.linked_at || 0) - (b.linked_at || 0))
 
-  const allDone = items.length > 0 && items.every((v: any) => v.issue_status === 'done')
+  const allDone = items.length > 0 && items.every((v: any) => isIssueStatusDone(v.issue_status))
 
   return {
     body: {
       items,
       total: items.length,
-      done_count: items.filter((v: any) => v.issue_status === 'done').length,
+      done_count: items.filter((v: any) => isIssueStatusDone(v.issue_status)).length,
       all_done: allDone,
     }
   }
@@ -3437,7 +3443,7 @@ export async function refreshRemediationStatus(req: any): Promise<PluginResponse
         const isDone = await checkStatusIsDone(tuid, statusID, statusName)
         await linkedIssue.set(item._key, {
           ...item,
-          issue_status: isDone ? 'done' : statusName,
+          issue_status: statusName,
         })
       }
     } catch {}
@@ -3445,13 +3451,13 @@ export async function refreshRemediationStatus(req: any): Promise<PluginResponse
 
   const updated = await qAll(linkedIssue,
     (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
-  const allDone = updated.length > 0 && updated.every((v: any) => v.issue_status === 'done')
+  const allDone = updated.length > 0 && updated.every((v: any) => isIssueStatusDone(v.issue_status))
 
   return {
     body: {
       items: updated,
       total: updated.length,
-      done_count: updated.filter((v: any) => v.issue_status === 'done').length,
+      done_count: updated.filter((v: any) => isIssueStatusDone(v.issue_status)).length,
       all_done: allDone,
     }
   }
@@ -3505,7 +3511,7 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
   // 返回更新后的数据
   const updated = await qAll(linkedIssue,
     (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
-  const allDone = updated.length > 0 && updated.every((v: any) => v.issue_status === 'done')
+  const allDone = updated.length > 0 && updated.every((v: any) => isIssueStatusDone(v.issue_status))
 
   // 全部整改项刚完成时通知决议人 + 评审发起人
   if (allDone && updatedCount > 0) {
@@ -3539,7 +3545,7 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
       updated_count: updatedCount,
       items: updated,
       total: updated.length,
-      done_count: updated.filter((v: any) => v.issue_status === 'done').length,
+      done_count: updated.filter((v: any) => isIssueStatusDone(v.issue_status)).length,
       all_done: allDone,
     }
   }
@@ -3589,10 +3595,10 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
         const statusID = res?.status?.id || res?.data?.status?.id || res?.status_uuid || ''
         if (statusName) {
           const isDone = await checkStatusIsDone(tuid, statusID, statusName)
-          if (item.issue_status !== (isDone ? 'done' : statusName)) {
+          if (item.issue_status !== (statusName)) {
             await linkedIssue.set(item._key, {
               ...item,
-              issue_status: isDone ? 'done' : statusName,
+              issue_status: statusName,
             })
           }
         }
@@ -3605,7 +3611,7 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
     (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
 
   // 校验：所有整改项已完成
-  const notDone = syncedItems.filter((v: any) => v.issue_status !== 'done')
+  const notDone = syncedItems.filter((v: any) => !isIssueStatusDone(v.issue_status))
   if (notDone.length > 0) {
     return {
       body: {
