@@ -458,13 +458,21 @@ const ReviewerWorkspace: React.FC<{
  const rv = data.review
  const reviewers = data.reviewers || []
  const allIssues = data.linked_issues || []
- const issues = allIssues.filter((iss: any) => iss.linked_by === currentUser.uuid)
-
  // 自动匹配当前用户的评审角色
  const myReviewer = reviewers.find((r: any) => r.reviewer_uuid === currentUser.uuid)
  const myRole = myReviewer?.role_name || ''
  const _wsRoundNo = rv.round_no || 1
  const alreadySubmitted = !!(myReviewer?.submitted_at > 0 && (myReviewer?.round_no || 1) === _wsRoundNo)
+
+ // 决议角色同步判断（用于渲染时 decisionRule 尚未加载完成的情况）
+ const _rvReviewType = (rv.review_type || 'dcp')
+ const _defaultPubRole = _rvReviewType === 'tr' ? '技术负责人' : 'IPMT代表'
+ const _rvResolutionRule = (data as any).resolution_rule
+ const _pubRole = _rvResolutionRule?.publisher?.role || _rvResolutionRule?.publisher?.roles?.[0] || _defaultPubRole
+ const _isPublisherSync = myRole === _pubRole
+
+ // 决议人看全部整改项，评审人只看自己创建的
+ const issues = _isPublisherSync ? allIssues : allIssues.filter((iss: any) => iss.linked_by === currentUser.uuid)
 
  const [opinionForm, setOpinionForm] = useState({
  reviewer_uuid: currentUser.uuid || '',
@@ -495,7 +503,6 @@ const ReviewerWorkspace: React.FC<{
  const [remediationIssueType, setRemediationIssueType] = useState('')
 
  // 加载当前评审类型的决议规则配置 + 角色列表 + 整改项类型
- const _rvReviewType = (rv.review_type || 'dcp')
  useEffect(() => {
    callApi('/dcp/config').then((c: any) => {
      const rules = c.resolution_rule_config || {}
@@ -1271,10 +1278,8 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  <label style={S.label}>{(resolutionForm.final_conclusion === 'conditional_pass' || resolutionForm.final_conclusion === 'rework') ? '条件说明 *' : '条件说明'}</label>
  <textarea style={S.textarea} rows={3} value={resolutionForm.condition_notes} onChange={e => setResolutionForm({ ...resolutionForm, condition_notes: e.target.value })} placeholder={(resolutionForm.final_conclusion === 'conditional_pass' || resolutionForm.final_conclusion === 'rework') ? '请填写条件说明（必填）…' : "（可选）如为'有条件通过'，请说明条件…"} />
  {(resolutionForm.final_conclusion === 'conditional_pass' || resolutionForm.final_conclusion === 'rework') && (
-   <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: '#fff7e6', color: '#fa8c16', border: '1px solid #faad14' }}>
-     发布前必须在评审详情页「整改项」tab 中创建至少 1 个整改工作项。{(data.remediation_issues || []).length > 0
-       ? <span style={{ color: '#52c41a' }}> 已创建 {data.remediation_issues.length} 个。</span>
-       : <span style={{ color: '#ff4d4f' }}> 当前无整改项。</span>}
+   <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: '#e6f4ff', color: '#1677ff', border: '1px solid #91caff' }}>
+     当前已有 {(data.remediation_issues || []).length} 个整改项，如不足可在上方整改项区域按需追加。
    </div>
  )}
  </div>
@@ -1303,12 +1308,9 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  </tbody>
  </table>
  </div>
- </div>
+</div>
 
- {/* Checklist 详情（可展开） */}
- {(data.checklist || []).length > 0 && <ChecklistInline checklist={data.checklist} />}
-
- <button style={{ ...S.btn(true), marginTop: 12, background: '#faad14' }} onClick={handlePublishResolution} disabled={resolving}>
+<button style={{ ...S.btn(true), marginTop: 12, background: '#faad14' }} onClick={handlePublishResolution} disabled={resolving}>
  {resolving ? '发布中…' : '发布决议'}
  </button>
  </div>
@@ -1370,11 +1372,11 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  )
  })()}
 
- {/* 整改工作项（仅我创建的） */}
+ {/* 整改工作项 */}
  <div style={S.card}>
- <h4 style={S.sectionTitle}>我的整改项（{issues.length}个）</h4>
- {allIssues.length > issues.length && <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>（共 {allIssues.length} 个关联工作项，仅显示你创建的 {issues.length} 个）</div>}
- {issues.length === 0 ? <div style={{ color: '#999', padding: 12, textAlign: 'center', fontSize: 13 }}>{allIssues.length > 0 ? '其他评审人已创建工作项，你尚未创建' : '暂无关联工作项'}</div> :
+ <h4 style={S.sectionTitle}>{canPublish ? '整改项' : '我的整改项'}（{issues.length}个）</h4>
+ {!canPublish && allIssues.length > issues.length && <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>（共 {allIssues.length} 个关联工作项，仅显示你创建的 {issues.length} 个）</div>}
+ {issues.length === 0 ? <div style={{ color: '#999', padding: 12, textAlign: 'center', fontSize: 13 }}>{canPublish ? '暂无整改项' : (allIssues.length > 0 ? '其他评审人已创建工作项，你尚未创建' : '暂无关联工作项')}</div> :
  <table style={S.table}>
  <thead><tr>
  <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>类型</th><th style={{ ...S.th, width: 80 }}>状态</th><th style={{ ...S.th, width: 80 }}>创建者</th>
@@ -1396,7 +1398,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  </tbody>
  </table>}
  <div style={{ marginTop: 16, borderTop: '1px solid #f0f0f0', paddingTop: 12 }}>
- {alreadySubmitted ? (
+ {alreadySubmitted && !canPublish ? (
    <div style={{ padding: '12px', textAlign: 'center', fontSize: 13, color: '#999' }}>
      已提交评审意见，不可再创建整改项
    </div>

@@ -2601,14 +2601,7 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   if ((normalizedFc === 'conditional_pass' || normalizedFc === 'rework') && !cn.trim()) {
     return { body: { error: '有条件通过/返工必须填写条件说明' }, statusCode: 400 }
   }
-  // conditional_pass / rework 必须至少创建一个整改项
-  if (normalizedFc === 'conditional_pass' || normalizedFc === 'rework') {
-    const remediationItems = await qAll(linkedIssue,
-      (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
-    if (remediationItems.length === 0) {
-      return { body: { error: '有条件通过/返工必须至少创建一个整改工作项，请在整改项区域创建后再发布决议' }, statusCode: 400 }
-    }
-  }
+  // 整改项非必填：评审人已创建的整改项足够时，决议人无需重复创建
 
   // 决议实体 — 多轮使用轮次相关 key
   const resKey = currentRoundNo > 1 ? `${rid}_r${currentRoundNo}` : rid
