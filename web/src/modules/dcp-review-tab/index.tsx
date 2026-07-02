@@ -1701,10 +1701,20 @@ const LinkedIssuesPanel: React.FC<{ data: any; projectUuid: string; projectKey: 
 const RISK_LABELS: Record<string, string> = { low: '低', medium: '中', high: '高' }
 
 function SnapshotSections({ res, defaultExpanded }: { res: any; defaultExpanded: boolean }) {
-  const votes: any[] = res.based_on_votes ? (() => { try { return JSON.parse(res.based_on_votes) } catch { return [] } })() : []
-  const indicators: any[] = res.snapshot_indicators ? (() => { try { return JSON.parse(res.snapshot_indicators) } catch { return [] } })() : []
-  const checklist: any[] = res.snapshot_checklist ? (() => { try { return JSON.parse(res.snapshot_checklist) } catch { return [] } })() : []
-  const issues: any[] = res.snapshot_issues ? (() => { try { return JSON.parse(res.snapshot_issues) } catch { return [] } })() : []
+  // 兼容旧格式（数组=纯投票）和新格式（对象={votes, indicators, checklist, issues}）
+  const raw = res.based_on_votes ? (() => { try { return JSON.parse(res.based_on_votes) } catch { return null } })() : null
+  let votes: any[] = []
+  let indicators: any[] = []
+  let checklist: any[] = []
+  let issues: any[] = []
+  if (Array.isArray(raw)) {
+    votes = raw
+  } else if (raw && typeof raw === 'object') {
+    votes = raw.votes || []
+    indicators = raw.indicators || []
+    checklist = raw.checklist || []
+    issues = raw.issues || []
+  }
   const [expanded, setExpanded] = useState(defaultExpanded)
 
   const sectionBtn = (label: string, count: number): React.CSSProperties => ({

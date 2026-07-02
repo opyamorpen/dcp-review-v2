@@ -2558,60 +2558,54 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   // 决议实体 — 多轮使用轮次相关 key
   const resKey = currentRoundNo > 1 ? `${rid}_r${currentRoundNo}` : rid
 
-  // 冻结快照：指标、checklist、整改工作项（与评审人意见一起留存）
+  // 冻结快照：指标、checklist、整改工作项（与评审人意见一起留存到 based_on_votes）
   const [snapIndicators, snapChecklistRaw, snapIssues] = await Promise.all([
     qAll(indData, (v: any) => v.review_uuid === rid),
     Promise.resolve((rv as any).checklist_json || '[]'),
     qAll(linkedIssue, (v: any) => v.review_uuid === rid),
   ])
-  // 指标快照：精简字段 + 关联模板名称
   const allIndTpls = await qAll(indTpl)
-  const snapshotIndicators = JSON.stringify(snapIndicators.map((ind: any) => {
+  const snapshotIndicators = snapIndicators.map((ind: any) => {
     const tpl = allIndTpls.find((t: any) => t._key === ind.template_id) as any
     return {
-      template_id: ind.template_id,
       indicator_name: tpl?.indicator_name || '',
       current_value: ind.current_value || 0,
       risk_color: ind.risk_color || 'green',
       notes: ind.notes || '',
     }
-  }))
-  // checklist 快照：直接存原始 JSON
-  const snapshotChecklist = snapChecklistRaw
-  // 整改工作项快照：精简字段
-  const snapshotIssues = JSON.stringify(snapIssues.map((iss: any) => ({
-    issue_uuid: iss.issue_uuid,
+  })
+  const snapshotChecklist = jsonArr(snapChecklistRaw)
+  const snapshotIssues = snapIssues.map((iss: any) => ({
     issue_number: iss.issue_number || '',
     issue_title: iss.issue_title || '',
-    issue_type: iss.issue_type || '',
     issue_status: iss.issue_status || '',
-    linked_by: iss.linked_by || '',
     linked_by_name: iss.linked_by_name || '',
-    link_type: iss.link_type || 'general',
     locked: iss.locked || '',
-  })))
+  }))
 
   await resolution.set(resKey, {
     review_uuid: rid,
     final_conclusion: normalizedFc,
     condition_notes: cn,
-    based_on_votes: JSON.stringify(allRvrs.map((r: any) => ({
-      reviewer_uuid: r.reviewer_uuid,
-      role_name: r.role_name,
-      conclusion: r.conclusion || '',
-      risk_level: r.risk_level || 'medium',
-      opinion_summary: r.opinion_summary || '',
-      submitted_at: r.submitted_at || 0,
-    }))),
-    snapshot_indicators: snapshotIndicators,
-    snapshot_checklist: snapshotChecklist,
-    snapshot_issues: snapshotIssues,
+    based_on_votes: JSON.stringify({
+      votes: allRvrs.map((r: any) => ({
+        reviewer_uuid: r.reviewer_uuid,
+        role_name: r.role_name,
+        conclusion: r.conclusion || '',
+        risk_level: r.risk_level || 'medium',
+        opinion_summary: r.opinion_summary || '',
+        submitted_at: r.submitted_at || 0,
+      })),
+      indicators: snapshotIndicators,
+      checklist: snapshotChecklist,
+      issues: snapshotIssues,
+    }),
     snapshot_number: snapshotNumber,
     published_by: puuid,
     published_by_name: publisher_name || '',
     published_at: now,
     round_no: currentRoundNo,
-  } as any)
+  })
   // 根据决议结论确定目标状态
   let targetState: string
   let newStatus: string
