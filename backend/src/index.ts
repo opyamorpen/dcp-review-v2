@@ -2375,6 +2375,7 @@ export async function createIssue(req: any): Promise<PluginResponse> {
               { field_uuid: 'field001', value: title },
               { field_uuid: 'field006', value: projectID },
               { field_uuid: 'field007', value: typeUuid },
+              { field_uuid: 'field004', value: assignee_uuid || rv.creator_uuid || '' },
             ],
           }],
         } : {
