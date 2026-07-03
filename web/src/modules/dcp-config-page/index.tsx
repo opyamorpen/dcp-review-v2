@@ -113,7 +113,7 @@ const App: React.FC = () => {
  }
  const res = await apiPost('/dcp/config', body)
  if (res.error) { setMessage('保存失败: ' + res.error) }
- else { setMessage('配置已保存'); setEditing(false) }
+ else { setMessage('配置已保存，仅对后续新建评审单生效，已创建评审单不受影响。'); setEditing(false) }
  } catch (err: any) { setMessage('保存失败: ' + err.message) }
  finally { setSaving(false) }
  }

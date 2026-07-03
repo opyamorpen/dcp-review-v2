@@ -77,6 +77,9 @@ declare var ONESEntities: {
             round_no?: number;
             round_state?: string;
             state_history_json?: string;
+            resolution_rule_json?: string;
+            config_frozen_at?: number;
+            config_version_note?: string;
         };
         indexes: null;
     };

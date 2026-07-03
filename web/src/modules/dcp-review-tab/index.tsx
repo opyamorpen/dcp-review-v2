@@ -1045,6 +1045,11 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
             </span>
           )}
         </div>
+        {rv.config_frozen_at > 0 && (
+          <div style={{ marginTop: 4, fontSize: 11, color: '#999' }}>
+            本评审单按创建时配置执行，后续插件配置变更不影响本评审单。
+          </div>
+        )}
       </div>
       {/* 复审提示横幅 */}
       {effState === 're_reviewing' && (() => {

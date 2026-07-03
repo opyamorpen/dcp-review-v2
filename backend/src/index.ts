@@ -440,8 +440,10 @@ function getPublisherRole(rule: any): string {
 
 // 判断某个 user_uuid 是否是本评审的决议发布角色
 async function isPublisherRole(rv: any, userUuid: string): Promise<boolean> {
-  const _rvType = (rv as any).review_type || 'dcp'
-  const _rule = await getResolutionRuleByType(_rvType)
+  let _rule: any
+  try {
+    _rule = await getResolutionRuleForReview(rv)
+  } catch { return false }
   const _pubRole = getPublisherRole(_rule)
   if (!_pubRole) return false
   const rid = (rv as any).review_uuid
@@ -527,6 +529,37 @@ async function getResolutionRuleByType(reviewType: string): Promise<any> {
   return cfg[type] || JSON.parse(JSON.stringify(DEFAULT_RESOLUTION_RULES[type]))
 }
 
+// 构建冻结决议规则：在评审单创建时把当前规则 + 依赖角色模板的展开结果一次性固化
+// 后续所有流程读取冻结规则，不再依赖实时角色模板配置
+async function buildFrozenRule(reviewType: string): Promise<any> {
+  const rule = await getResolutionRuleByType(reviewType)
+  const roleTemplates = filterRolesByType(await qAll(roleTpl), reviewType)
+  return {
+    ...rule,
+    _frozen: {
+      publisherRole: getPublisherRole(rule),
+      voteScopeRoleNames: resolveVoteScopeRoleNames(rule, roleTemplates),
+      mustVoteRoleNames: roleTemplates.filter((r: any) => r.must_vote).map((r: any) => r.role_name),
+      mustVoteOrVetoNames: roleTemplates.filter((r: any) => r.must_vote || r.has_veto).map((r: any) => r.role_name),
+      vetoRoleNames: roleTemplates.filter((r: any) => r.has_veto).map((r: any) => r.role_name),
+    },
+  }
+}
+
+// 从评审单读取固化的决议规则；旧数据无固化规则时返回错误
+async function getResolutionRuleForReview(rv: any): Promise<any> {
+  const raw = (rv as any).resolution_rule_json
+  if (raw) {
+    try {
+      const rule = JSON.parse(raw)
+      if (rule && Array.isArray(rule.allowedConclusions)) {
+        return rule
+      }
+    } catch { /* 格式损坏，走错误路径 */ }
+  }
+  throw new Error('当前评审单缺少固化决议规则，请重新创建评审单或联系管理员处理')
+}
+
 // 按 review_type 过滤角色模板
 function filterRolesByType(roleTemplates: any[], reviewType: string): any[] {
   return roleTemplates.filter((rt: any) => (rt.review_type || 'dcp') === reviewType)
@@ -550,15 +583,16 @@ function resolveVoteScopeRoleNames(rule: any, roleTemplates: any[]): string[] {
 }
 
 // 校验通过规则（发布决议时调用）
+// 优先使用冻结规则中的 _frozen 角色范围；无 _frozen 时回退到实时 roleTemplates
 function validatePassRule(
-  passRule: any, allRvrs: any[], roleTemplates: any[], fc: string,
+  passRule: any, allRvrs: any[], roleTemplates: any[], fc: string, frozen?: any,
 ): { ok: boolean; error?: string } {
   const mode = passRule.mode || 'min_approval_count'
   const approvalConclusions = passRule.approvalConclusions || ['pass', 'conditional_pass']
 
   // 一票否决检查（仅对 pass 结论生效）
   if (passRule.rejectOnAnyVeto && fc === 'pass') {
-    const vetoRoleNames = roleTemplates.filter((rt: any) => rt.has_veto).map((rt: any) => rt.role_name)
+    const vetoRoleNames = (frozen?.vetoRoleNames) || roleTemplates.filter((rt: any) => rt.has_veto).map((rt: any) => rt.role_name)
     const vetoRejects = allRvrs.filter((r: any) =>
       vetoRoleNames.includes(r.role_name) && (r.submitted_at > 0) &&
       !approvalConclusions.includes(r.conclusion),
@@ -572,7 +606,7 @@ function validatePassRule(
   if (fc !== 'pass') return { ok: true }
 
   if (mode === 'min_approval_count') {
-    const scopeNames = resolveVoteScopeRoleNames({ passRule }, roleTemplates)
+    const scopeNames = (frozen?.voteScopeRoleNames) || resolveVoteScopeRoleNames({ passRule }, roleTemplates)
     const candidates = allRvrs.filter((r: any) => scopeNames.includes(r.role_name))
     const approvals = candidates.filter((r: any) => approvalConclusions.includes(r.conclusion))
     const minCount = passRule.minCount || 3
@@ -584,7 +618,7 @@ function validatePassRule(
       return { ok: false, error: `决议为「通过」需至少 ${minCount} 位评审人投通过/有条件通过，当前仅 ${approvals.length} 位` }
     }
   } else if (mode === 'all_required_approved') {
-    const mustVoteNames = roleTemplates.filter((rt: any) => rt.must_vote).map((rt: any) => rt.role_name)
+    const mustVoteNames = (frozen?.mustVoteRoleNames) || roleTemplates.filter((rt: any) => rt.must_vote).map((rt: any) => rt.role_name)
     const notApproved = allRvrs.filter((r: any) =>
       mustVoteNames.includes(r.role_name) && (r.submitted_at > 0) &&
       !approvalConclusions.includes(r.conclusion),
@@ -655,8 +689,10 @@ function conclusionLabel(value: string): string {
 
 // 判断评审单是否满足决议前置条件（按 submitRequirement.mode 判断）
 // 排除决议角色——决议人不参与前置评审提交
+// 优先使用冻结规则中的 _frozen 角色范围；无 _frozen 时回退到实时 roleTemplates
 function isResolutionReady(rule: any, reviewers: any[], roleTemplates: any[]): boolean {
-  const publisherRole = getPublisherRole(rule)
+  const frozen = rule?._frozen
+  const publisherRole = frozen?.publisherRole || getPublisherRole(rule)
   const frontReviewers = publisherRole ? reviewers.filter((r: any) => r.role_name !== publisherRole) : reviewers
   const submitMode = rule?.submitRequirement?.mode || 'must_vote_roles'
   if (submitMode === 'publisher_only') return true
@@ -664,13 +700,13 @@ function isResolutionReady(rule: any, reviewers: any[], roleTemplates: any[]): b
     return frontReviewers.length > 0 && frontReviewers.every((r: any) => r.submitted_at > 0)
   }
   if (submitMode === 'vote_scope_roles') {
-    const scopeNames = resolveVoteScopeRoleNames(rule, roleTemplates)
+    const scopeNames = (frozen?.voteScopeRoleNames) || resolveVoteScopeRoleNames(rule, roleTemplates)
     const scopeReviewers = frontReviewers.filter((r: any) => scopeNames.includes(r.role_name))
     if (scopeReviewers.length === 0) return false
     return scopeReviewers.every((r: any) => r.submitted_at > 0)
   }
   // must_vote_roles
-  const mustVoteNames = roleTemplates.filter((rt: any) => rt.must_vote || rt.has_veto).map((rt: any) => rt.role_name)
+  const mustVoteNames = (frozen?.mustVoteOrVetoNames) || roleTemplates.filter((rt: any) => rt.must_vote || rt.has_veto).map((rt: any) => rt.role_name)
   const mustReviewers = frontReviewers.filter((r: any) => mustVoteNames.includes(r.role_name))
   if (mustReviewers.length === 0) return false
   return mustReviewers.every((r: any) => r.submitted_at > 0)
@@ -892,6 +928,14 @@ export async function createReview(req: any): Promise<PluginResponse> {
   const rvUuid = makeUuid()
   const now = Date.now()
   const reviewType = review_type || 'dcp'
+  // 固化决议规则：创建时把当前规则 + 依赖角色模板的展开结果一次性写入评审单
+  let frozenRuleJson = ''
+  try {
+    const frozenRule = await buildFrozenRule(reviewType)
+    frozenRuleJson = JSON.stringify(frozenRule)
+  } catch (e: any) {
+    return { body: { error: `${reviewType.toUpperCase()} 决议规则读取失败: ${e.message || String(e)}` }, statusCode: 400 }
+  }
   // 生成唯一编号: {项目标识}{YYYYMMDD}{两位序号}，序号计数器存 base_config
   const projectIdentifier = b.project_identifier || ''
   let reviewNumber = ''
@@ -927,6 +971,9 @@ export async function createReview(req: any): Promise<PluginResponse> {
     created_at: now, updated_at: now,
     review_number: reviewNumber,
     review_type: reviewType,
+    resolution_rule_json: frozenRuleJson,
+    config_frozen_at: now,
+    config_version_note: '按创建时配置执行',
   })
   // 带出材料模板
   const mats = await qAll(matTpl, (v: any) => jsonArr(v.applicable_phases).includes(phase_code) && (v.review_type || 'dcp') === reviewType)
@@ -1000,6 +1047,15 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
   // 创建新评审单
   const newRid = makeUuid()
   const now = Date.now()
+  // 重新发起使用当前最新配置固化规则（而非复制源单旧规则）
+  const reviewType = srcRv.review_type || 'dcp'
+  let frozenRuleJson = ''
+  try {
+    const frozenRule = await buildFrozenRule(reviewType)
+    frozenRuleJson = JSON.stringify(frozenRule)
+  } catch (e: any) {
+    return { body: { error: `${reviewType.toUpperCase()} 决议规则读取失败: ${e.message || String(e)}` }, statusCode: 400 }
+  }
   // 生成编号
   const projectIdentifier = srcRv.project_identifier || b.project_identifier || ''
   let reviewNumber = ''
@@ -1051,6 +1107,10 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
     updated_at: now,
     review_number: reviewNumber,
     reviewers_json: JSON.stringify(newReviewers),
+    review_type: reviewType,
+    resolution_rule_json: frozenRuleJson,
+    config_frozen_at: now,
+    config_version_note: '按创建时配置执行',
   })
 
   // 复制材料（含文件附件）
@@ -1493,8 +1553,13 @@ export async function startReview(req: any): Promise<PluginResponse> {
     return { body: { error: `以下角色尚未指定评审人：${missingRoles.join('、')}` }, statusCode: 400 }
   }
 
-  // 校验 1.2：决议角色必须已指定且唯一
-  const _startRule = await getResolutionRuleByType(reviewType)
+  // 校验 1.2：决议角色必须已指定且唯一（使用固化规则）
+  let _startRule: any
+  try {
+    _startRule = await getResolutionRuleForReview(rv)
+  } catch (e: any) {
+    return { body: { error: e.message || String(e) }, statusCode: 400 }
+  }
   const _publisherRole = getPublisherRole(_startRule)
   if (_publisherRole) {
     const publisherReviewers = reviewers.filter((rvr: any) => rvr.role_name === _publisherRole)
@@ -1509,7 +1574,7 @@ export async function startReview(req: any): Promise<PluginResponse> {
   }
 
   // 校验 1.5：决议规则可达性校验——按实际评审人检查 minCount 是否可达
-  const _rule = await getResolutionRuleByType(reviewType)
+  const _rule = _startRule
   if (_rule.passRule?.mode === 'min_approval_count' && _rule.allowedConclusions?.includes('pass')) {
     const scopeNames = resolveVoteScopeRoleNames(_rule, roleTemplates)
     const actualCandidates = reviewers.filter((r: any) => scopeNames.includes(r.role_name))
@@ -2030,8 +2095,13 @@ export async function updateReviewers(req: any): Promise<PluginResponse> {
     return { body: { error: `同一评审单中，一个用户不能同时担任多个评审角色：${desc}` }, statusCode: 400 }
   }
 
-  // 校验：决议角色必须指定且唯一
-  const _rule = await getResolutionRuleByType(_rvType)
+  // 校验：决议角色必须指定且唯一（使用固化规则）
+  let _rule: any
+  try {
+    _rule = await getResolutionRuleForReview(rv)
+  } catch (e: any) {
+    return { body: { error: e.message || String(e) }, statusCode: 400 }
+  }
   const publisherRole = getPublisherRole(_rule)
   if (publisherRole) {
     const publisherEntries = normalized.filter((r: any) => r.role_name === publisherRole)
@@ -2202,10 +2272,16 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
       ? { ...s, ...newData, _key: s._key || target._key }
       : s
   )
-  // 检查决议前置条件
+  // 检查决议前置条件（使用固化规则）
   const _rvType = (rv as any).review_type || 'dcp'
-  const _rule = await getResolutionRuleByType(_rvType)
-  const _pubRole = getPublisherRole(_rule)
+  let _rule: any
+  try {
+    _rule = await getResolutionRuleForReview(rv)
+  } catch (e: any) {
+    // 旧数据无固化规则，不阻塞提交但跳过自动流转
+    _rule = null
+  }
+  const _pubRole = _rule ? getPublisherRole(_rule) : ''
   let _ready = false
   if (_pubRole && updatedSnap.length > 0) {
     const _allRoleTpls = filterRolesByType(await qAll(roleTpl), _rvType)
@@ -2493,9 +2569,14 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     return { body: { error: '当前状态不可发布决议' }, statusCode: 400 }
   }
 
-  // 按 review_type 获取决议规则配置
+  // 按 review_type 获取固化决议规则
   const reviewType = (rv as any).review_type || 'dcp'
-  const rule = await getResolutionRuleByType(reviewType)
+  let rule: any
+  try {
+    rule = await getResolutionRuleForReview(rv)
+  } catch (e: any) {
+    return { body: { error: e.message || String(e) }, statusCode: 400 }
+  }
 
   // 兼容旧版中文结论
   let normalizedFc = fc
@@ -2554,7 +2635,7 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   // 校验：提交要求
   const submitMode = rule.submitRequirement.mode || 'must_vote_roles'
   if (submitMode === 'must_vote_roles') {
-    const mustVoteRoleNames = roleTemplates.filter((rt: any) => rt.must_vote).map((rt: any) => rt.role_name)
+    const mustVoteRoleNames = (rule._frozen?.mustVoteRoleNames) || roleTemplates.filter((rt: any) => rt.must_vote).map((rt: any) => rt.role_name)
     const unsubmitted = allRvrs.filter((r: any) => {
       if (!mustVoteRoleNames.includes(r.role_name)) return false
       return r.submitted_at === 0 || !r.submitted_at
@@ -2574,8 +2655,8 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
       }, statusCode: 400 }
     }
   } else if (submitMode === 'vote_scope_roles') {
-    // 计票范围内角色全部提交
-    const scopeNames = resolveVoteScopeRoleNames(rule, roleTemplates)
+    // 计票范围内角色全部提交（优先使用冻结角色范围）
+    const scopeNames = (rule._frozen?.voteScopeRoleNames) || resolveVoteScopeRoleNames(rule, roleTemplates)
     const unsubmitted = allRvrs.filter((r: any) => {
       if (!scopeNames.includes(r.role_name)) return false
       return r.submitted_at === 0 || !r.submitted_at
@@ -2589,8 +2670,8 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   }
   // publisher_only 模式：只要求发布人存在，不校验其他人
 
-  // 校验：通过规则
-  const passResult = validatePassRule(rule.passRule, allRvrs, roleTemplates, normalizedFc)
+  // 校验：通过规则（传入冻结角色范围）
+  const passResult = validatePassRule(rule.passRule, allRvrs, roleTemplates, normalizedFc, rule._frozen)
   if (!passResult.ok) {
     return { body: { error: passResult.error }, statusCode: 400 }
   }
@@ -2777,9 +2858,13 @@ export async function checkChecklist(req: any): Promise<PluginResponse> {
   if (myReviewer.submitted_at > 0 && (myReviewer.round_no || 1) === _chkRoundNo) {
     return { body: { error: '已提交评审意见，不可再修改 Checklist' }, statusCode: 400 }
   }
-  // 决议发布角色不可操作 checklist（按 review_type 规则配置判断）
-  const _rvType = (rv as any).review_type || 'dcp'
-  const _rule = await getResolutionRuleByType(_rvType)
+  // 决议发布角色不可操作 checklist（使用固化规则）
+  let _rule: any
+  try {
+    _rule = await getResolutionRuleForReview(rv)
+  } catch (e: any) {
+    return { body: { error: e.message || String(e) }, statusCode: 400 }
+  }
   const _pubRole = getPublisherRole(_rule)
   if (_pubRole && myReviewer.role_name === _pubRole) {
     return { body: { error: '决议发布角色不可操作 checklist' }, statusCode: 403 }
@@ -2867,7 +2952,12 @@ export async function remindReview(req: any): Promise<PluginResponse> {
   }
 
   const reviewType = (rv as any).review_type || 'dcp'
-  const rule = await getResolutionRuleByType(reviewType)
+  let rule: any
+  try {
+    rule = await getResolutionRuleForReview(rv)
+  } catch (e: any) {
+    return { body: { error: e.message || String(e) }, statusCode: 400 }
+  }
   const publisherRole = getPublisherRole(rule)
   const phaseName = (rv as any).phase_code || ''
   const reviewTitle = (rv as any).review_title || 'DCP评审'
@@ -3170,9 +3260,9 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
   if (target_state === 're_reviewing') {
     const notCfg = await getNotifyConfig()
     if (notCfg.enabled && notCfg.on_review_start) {
-      const _rvType = (rv as any).review_type || 'dcp'
-      const _rule = await getResolutionRuleByType(_rvType)
-      const _pubRole = getPublisherRole(_rule)
+      let _rule: any
+      try { _rule = await getResolutionRuleForReview(rv) } catch { _rule = null }
+      const _pubRole = _rule ? getPublisherRole(_rule) : ''
       const _snapRvrs = jsonArr((rv as any).reviewers_json || '[]')
       const _entityRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
       const _allRvrs = _entityRvrs.length > 0 ? _entityRvrs : _snapRvrs
@@ -3736,9 +3826,9 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
 
   // 5. 复审时通知评审人重新提交评审意见
   if (next_action === 're_review' && notCfg.enabled && notCfg.on_review_start) {
-    const _rvType = (rv as any).review_type || 'dcp'
-    const _rule = await getResolutionRuleByType(_rvType)
-    const _pubRole = getPublisherRole(_rule)
+    let _rule: any
+    try { _rule = await getResolutionRuleForReview(rv) } catch { _rule = null }
+    const _pubRole = _rule ? getPublisherRole(_rule) : ''
     const _snapRvrs = jsonArr(newReviewersJson)
     const _entityRvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
     const _allRvrs = _entityRvrs.length > 0 ? _entityRvrs : _snapRvrs
