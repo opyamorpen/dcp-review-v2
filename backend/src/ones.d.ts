@@ -80,6 +80,8 @@ declare var ONESEntities: {
             resolution_rule_json?: string;
             config_frozen_at?: number;
             config_version_note?: string;
+            role_templates_json?: string;
+            checklist_templates_json?: string;
         };
         indexes: null;
     };
@@ -96,6 +98,10 @@ declare var ONESEntities: {
             updated_by?: string;
             updated_at?: number;
             round_no?: number;
+            material_name?: string;
+            required?: number;
+            responsible_role?: string;
+            sort_order?: number;
         };
         indexes: null;
     };
@@ -108,6 +114,11 @@ declare var ONESEntities: {
             risk_color?: string;
             updated_by?: string;
             updated_at?: number;
+            indicator_name?: string;
+            threshold_type?: string;
+            yellow_threshold?: number;
+            red_threshold?: number;
+            sort_order?: number;
         };
         indexes: null;
     };

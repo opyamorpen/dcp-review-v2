@@ -560,6 +560,89 @@ async function getResolutionRuleForReview(rv: any): Promise<any> {
   throw new Error('当前评审单缺少固化决议规则，请重新创建评审单或联系管理员处理')
 }
 
+// ============================================================
+// 配置固化兜底读取函数
+// 旧数据无固化字段时回退实时模板，新数据优先用固化字段
+// ============================================================
+
+// 读取评审单固化的角色模板；旧数据无固化时回退实时 roleTpl
+async function getRoleTemplatesForReview(rv: any): Promise<any[]> {
+  const raw = (rv as any).role_templates_json
+  if (raw) {
+    try {
+      const arr = JSON.parse(raw)
+      if (Array.isArray(arr) && arr.length > 0) return arr
+    } catch { /* 格式损坏，走实时兜底 */ }
+  }
+  const reviewType = (rv as any).review_type || 'dcp'
+  return filterRolesByType(await qAll(roleTpl), reviewType)
+}
+
+// 读取评审单固化的 Checklist 模板；旧数据无固化时回退实时 checkItem
+async function getChecklistTemplatesForReview(rv: any): Promise<any[]> {
+  const raw = (rv as any).checklist_templates_json
+  if (raw) {
+    try {
+      const arr = JSON.parse(raw)
+      if (Array.isArray(arr)) return arr
+    } catch { /* 格式损坏，走实时兜底 */ }
+  }
+  const reviewType = (rv as any).review_type || 'dcp'
+  return await qAll(checkItem, (v: any) => v.phase_code === (rv as any).phase_code && (v.review_type || 'dcp') === reviewType)
+}
+
+// 读取材料实体固化的 required 字段；旧数据无固化时回退实时 matTpl
+async function getMaterialRequired(mat: any): Promise<number> {
+  if (mat.required !== undefined && mat.required !== null && mat.required !== '') {
+    return Number(mat.required) || 0
+  }
+  const tpl = (await qAll(matTpl)).find((t: any) => t._key === mat.template_id) as any
+  return tpl?.required ? 1 : 0
+}
+
+// 读取材料实体固化的名称；旧数据无固化时回退实时 matTpl
+async function getMaterialName(mat: any): Promise<string> {
+  if (mat.material_name) return mat.material_name
+  const tpl = (await qAll(matTpl)).find((t: any) => t._key === mat.template_id) as any
+  return tpl?.material_name || mat.template_id || ''
+}
+
+// 读取指标实体固化的阈值配置；旧数据无固化时回退实时 indTpl
+// 返回 { threshold_type, yellow_threshold, red_threshold, indicator_name } 或 null
+async function getIndicatorThreshold(ind: any): Promise<any> {
+  if (ind.threshold_type !== undefined && ind.threshold_type !== null && ind.threshold_type !== '') {
+    return {
+      threshold_type: ind.threshold_type,
+      yellow_threshold: Number(ind.yellow_threshold ?? 0),
+      red_threshold: Number(ind.red_threshold ?? 0),
+      indicator_name: ind.indicator_name || '',
+    }
+  }
+  const tpl = (await qAll(indTpl)).find((t: any) => t._key === ind.template_id) as any
+  if (!tpl) return null
+  return {
+    threshold_type: tpl.threshold_type || '',
+    yellow_threshold: Number(tpl.yellow_threshold ?? 0),
+    red_threshold: Number(tpl.red_threshold ?? 0),
+    indicator_name: tpl.indicator_name || '',
+  }
+}
+
+// 计算指标红黄绿颜色（优先用固化阈值，回退实时模板）
+async function calcRiskColor(ind: any, value: number): Promise<string> {
+  const cfg = await getIndicatorThreshold(ind)
+  if (!cfg || !cfg.threshold_type) return 'green'
+  let color = 'green'
+  if (cfg.threshold_type === '高于阈值预警') {
+    if (value > cfg.red_threshold) color = 'red'
+    else if (value > cfg.yellow_threshold) color = 'yellow'
+  } else if (cfg.threshold_type === '低于阈值预警') {
+    if (value < cfg.red_threshold) color = 'red'
+    else if (value < cfg.yellow_threshold) color = 'yellow'
+  }
+  return color
+}
+
 // 按 review_type 过滤角色模板
 function filterRolesByType(roleTemplates: any[], reviewType: string): any[] {
   return roleTemplates.filter((rt: any) => (rt.review_type || 'dcp') === reviewType)
@@ -956,6 +1039,18 @@ export async function createReview(req: any): Promise<PluginResponse> {
     reviewNumber = `${reviewType === 'tr' ? 'TR-' : ''}${projectIdentifier}${Date.now()}`
     Logger.info(`[DCP] review_number generation failed, fallback: ${reviewNumber}`)
   }
+  // 固化角色模板和 Checklist 模板（创建时配置快照）
+  const frozenRoles = filterRolesByType(await qAll(roleTpl), reviewType)
+  const frozenChecklist = await qAll(checkItem, (v: any) => v.phase_code === phase_code && (v.review_type || 'dcp') === reviewType)
+  const roleTemplatesJson = JSON.stringify(frozenRoles.map((r: any) => ({
+    role_name: r.role_name, must_vote: r.must_vote || 0, has_veto: r.has_veto || 0,
+    sort_order: r.sort_order ?? 0, review_type: r.review_type || reviewType,
+  })))
+  const checklistTemplatesJson = JSON.stringify(frozenChecklist.map((c: any) => ({
+    template_id: c._key, phase_code: c.phase_code, role_name: c.role_name,
+    item_text: c.item_text, sort_order: c.sort_order ?? 0,
+  })))
+
   await review.set(rvUuid, {
     review_uuid: rvUuid, project_uuid, phase_code,
     review_title: review_title || 'DCP评审', meeting_time: meeting_time || 0,
@@ -974,21 +1069,28 @@ export async function createReview(req: any): Promise<PluginResponse> {
     resolution_rule_json: frozenRuleJson,
     config_frozen_at: now,
     config_version_note: '按创建时配置执行',
+    role_templates_json: roleTemplatesJson,
+    checklist_templates_json: checklistTemplatesJson,
   })
-  // 带出材料模板
+  // 带出材料模板（含固化的名称/必填/责任角色/排序）
   const mats = await qAll(matTpl, (v: any) => jsonArr(v.applicable_phases).includes(phase_code) && (v.review_type || 'dcp') === reviewType)
   for (const m of mats) {
     await matItem.set(`${rvUuid}_mat_${m._key}`, {
       review_uuid: rvUuid, template_id: m._key, submit_status: 'pending',
       notes: '', updated_by: '', updated_at: 0,
+      material_name: m.material_name || '', required: m.required ? 1 : 0,
+      responsible_role: m.responsible_role || '', sort_order: m.sort_order ?? 0,
     })
   }
-  // 带出指标模板
+  // 带出指标模板（含固化的名称/阈值/排序）
   const inds = await qAll(indTpl, (v: any) => jsonArr(v.applicable_phases).includes(phase_code) && (v.review_type || 'dcp') === reviewType)
   for (const i of inds) {
     await indData.set(`${rvUuid}_ind_${i._key}`, {
       review_uuid: rvUuid, template_id: i._key, current_value: 0,
       notes: '', risk_color: 'green', updated_by: '', updated_at: 0,
+      indicator_name: i.indicator_name || '', threshold_type: i.threshold_type || '',
+      yellow_threshold: Number(i.yellow_threshold ?? 0), red_threshold: Number(i.red_threshold ?? 0),
+      sort_order: i.sort_order ?? 0,
     })
   }
   await writeAudit(rvUuid, creator_uuid || '', '创建评审', rvUuid,
@@ -1088,6 +1190,18 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
     opinion_summary: '',
   }))
 
+  // 固化角色模板和 Checklist 模板（用当前最新配置）
+  const frozenRoles = filterRolesByType(await qAll(roleTpl), reviewType)
+  const frozenChecklist = await qAll(checkItem, (v: any) => v.phase_code === srcRv.phase_code && (v.review_type || 'dcp') === reviewType)
+  const roleTemplatesJson = JSON.stringify(frozenRoles.map((r: any) => ({
+    role_name: r.role_name, must_vote: r.must_vote || 0, has_veto: r.has_veto || 0,
+    sort_order: r.sort_order ?? 0, review_type: r.review_type || reviewType,
+  })))
+  const checklistTemplatesJson = JSON.stringify(frozenChecklist.map((c: any) => ({
+    template_id: c._key, phase_code: c.phase_code, role_name: c.role_name,
+    item_text: c.item_text, sort_order: c.sort_order ?? 0,
+  })))
+
   await review.set(newRid, {
     review_uuid: newRid,
     project_uuid: srcRv.project_uuid,
@@ -1111,29 +1225,51 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
     resolution_rule_json: frozenRuleJson,
     config_frozen_at: now,
     config_version_note: '按创建时配置执行',
+    role_templates_json: roleTemplatesJson,
+    checklist_templates_json: checklistTemplatesJson,
   })
 
-  // 复制材料（含文件附件）
+  // 以新模板为准重新带出材料，源单文件按 template_id 匹配保留
   const srcMats = await qAll(matItem, (v: any) => v.review_uuid === srcRid)
-  for (const m of srcMats) {
-    const { _key, review_uuid, ...matData } = m
-    await matItem.set(`${newRid}_mat_${m.template_id}`, {
-      ...matData,
-      review_uuid: newRid,
-      submit_status: m.file_data ? 'submitted' : 'pending',
-      notes: '',
-      updated_by: '',
-      updated_at: 0,
+  const srcMatMap = new Map(srcMats.map((m: any) => [m.template_id, m]))
+  const newMats = await qAll(matTpl, (v: any) => jsonArr(v.applicable_phases).includes(srcRv.phase_code) && (v.review_type || 'dcp') === reviewType)
+  for (const m of newMats) {
+    const src = srcMatMap.get(m._key) as any
+    await matItem.set(`${newRid}_mat_${m._key}`, {
+      review_uuid: newRid, template_id: m._key,
+      submit_status: src?.file_data ? 'submitted' : 'pending',
+      notes: '', updated_by: '', updated_at: 0,
+      material_name: m.material_name || '', required: m.required ? 1 : 0,
+      responsible_role: m.responsible_role || '', sort_order: m.sort_order ?? 0,
+      // 保留源单已上传的文件
+      file_name: src?.file_name || '', file_data: src?.file_data || '',
+      file_size: src?.file_size || 0, uploaded_at: src?.uploaded_at || 0,
     })
   }
 
-  // 复制指标
+  // 以新模板为准重新带出指标，源单 current_value 按 template_id 匹配保留
   const srcInds = await qAll(indData, (v: any) => v.review_uuid === srcRid)
-  for (const i of srcInds) {
-    const { _key, review_uuid, ...indData } = i
-    await indData.set(`${newRid}_ind_${i.template_id}`, {
-      ...indData,
-      review_uuid: newRid,
+  const srcIndMap = new Map(srcInds.map((i: any) => [i.template_id, i]))
+  const newInds = await qAll(indTpl, (v: any) => jsonArr(v.applicable_phases).includes(srcRv.phase_code) && (v.review_type || 'dcp') === reviewType)
+  for (const i of newInds) {
+    const src = srcIndMap.get(i._key) as any
+    const currentValue = Number(src?.current_value ?? 0)
+    // 用新模板阈值重新计算颜色
+    let color = 'green'
+    if (i.threshold_type === '高于阈值预警') {
+      if (currentValue > Number(i.red_threshold ?? 0)) color = 'red'
+      else if (currentValue > Number(i.yellow_threshold ?? 0)) color = 'yellow'
+    } else if (i.threshold_type === '低于阈值预警') {
+      if (currentValue < Number(i.red_threshold ?? 0)) color = 'red'
+      else if (currentValue < Number(i.yellow_threshold ?? 0)) color = 'yellow'
+    }
+    await indData.set(`${newRid}_ind_${i._key}`, {
+      review_uuid: newRid, template_id: i._key, current_value: currentValue,
+      notes: src?.notes || '', risk_color: color,
+      updated_by: '', updated_at: 0,
+      indicator_name: i.indicator_name || '', threshold_type: i.threshold_type || '',
+      yellow_threshold: Number(i.yellow_threshold ?? 0), red_threshold: Number(i.red_threshold ?? 0),
+      sort_order: i.sort_order ?? 0,
     })
   }
 
@@ -1145,8 +1281,8 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
   return { body: {
     review_uuid: newRid,
     review_number: reviewNumber,
-    materials_count: srcMats.length,
-    indicators_count: srcInds.length,
+    materials_count: newMats.length,
+    indicators_count: newInds.length,
     reviewers_count: newReviewers.length,
   } }
 }
@@ -1189,14 +1325,27 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
       }
       return r
     })
+    // 优先使用实体固化的模板字段，旧数据回退实时模板
     const allMatTpls = await qAll(matTpl)
-    const matsWithTpl = materials.map((m: any) => ({
-      ...m, template: allMatTpls.find((t: any) => t._key === m.template_id) || null,
-    }))
+    const matsWithTpl = materials.map((m: any) => {
+      const frozenTpl = (m.material_name !== undefined && m.material_name !== null && m.material_name !== '') ? {
+        _key: m.template_id, material_name: m.material_name,
+        required: m.required, responsible_role: m.responsible_role || '',
+        sort_order: m.sort_order ?? 0,
+      } : null
+      const liveTpl = allMatTpls.find((t: any) => t._key === m.template_id) || null
+      return { ...m, template: frozenTpl || liveTpl }
+    })
     const allIndTpls = await qAll(indTpl)
-    const indsWithTpl = indicators.map((i: any) => ({
-      ...i, template: allIndTpls.find((t: any) => t._key === i.template_id) || null,
-    }))
+    const indsWithTpl = indicators.map((i: any) => {
+      const frozenTpl = (i.threshold_type !== undefined && i.threshold_type !== null && i.threshold_type !== '') ? {
+        _key: i.template_id, indicator_name: i.indicator_name || '',
+        threshold_type: i.threshold_type, yellow_threshold: i.yellow_threshold,
+        red_threshold: i.red_threshold, sort_order: i.sort_order ?? 0,
+      } : null
+      const liveTpl = allIndTpls.find((t: any) => t._key === i.template_id) || null
+      return { ...i, template: frozenTpl || liveTpl }
+    })
     Logger.info(`[DCP] getReviewDetail building response`)
     const _rvEffState = getEffectiveState(rv)
     const _currentRoundNo = (rv as any).round_no || 1
@@ -1452,7 +1601,7 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
     const publisherRole = getPublisherRole(rule)
     const isPublisher = publisherRole && my.role_name === publisherRole
     // 按 submitRequirement 判断是否满足决议条件
-    const allRoleTpls = filterRolesByType(await qAll(roleTpl), rvType)
+    const allRoleTpls = await getRoleTemplatesForReview(r)
     // 投影到当前轮次：旧轮次的提交数据视为未提交（与 getReviewDetail/submitOpinion 保持一致）
     const _listRoundNo = (r as any).round_no || 1
     const rvrsProjected = rvrs.map((rvr: any) => {
@@ -1535,14 +1684,14 @@ export async function startReview(req: any): Promise<PluginResponse> {
     }
   }
 
-  // 校验 1：所有 must_vote 或 has_veto 角色都已指定评审人
+  // 校验 1：所有 must_vote 或 has_veto 角色都已指定评审人（使用固化角色模板）
   const snapReviewers = jsonArr((rv as any).reviewers_json || '[]')
   const entityReviewersStart = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
   const reviewers = entityReviewersStart.length > 0 ? entityReviewersStart : snapReviewers
   if (reviewers.length === 0) {
     return { body: { error: '请先添加评审人' }, statusCode: 400 }
   }
-  const roleTemplates = filterRolesByType(await qAll(roleTpl), reviewType)
+  const roleTemplates = await getRoleTemplatesForReview(rv)
   const requiredRoles = roleTemplates.filter((rt: any) => rt.must_vote || rt.has_veto)
   const missingRoles: string[] = []
   for (const rt of requiredRoles) {
@@ -1584,19 +1733,18 @@ export async function startReview(req: any): Promise<PluginResponse> {
     }
   }
 
-  // 校验 2：必填交付物必须已上传文件
-  const allMatTpls = await qAll(matTpl)
+  // 校验 2：必填交付物必须已上传文件（使用固化 required 字段，兜底实时模板）
   const materials = await qAll(matItem, (v: any) => v.review_uuid === rid)
-  const requiredMats = materials.filter((m: any) => {
-    const tpl = allMatTpls.find((t: any) => t._key === m.template_id)
-    return tpl && (tpl as any).required
-  })
+  const requiredMats: any[] = []
+  for (const m of materials) {
+    if (await getMaterialRequired(m)) requiredMats.push(m)
+  }
   const unsubmittedRequired = requiredMats.filter((m: any) => !m.file_data)
   if (unsubmittedRequired.length > 0) {
-    const names = unsubmittedRequired.map((m: any) => {
-      const tpl = allMatTpls.find((t: any) => t._key === m.template_id)
-      return (tpl as any)?.material_name || m.template_id
-    })
+    const names: string[] = []
+    for (const m of unsubmittedRequired) {
+      names.push(await getMaterialName(m))
+    }
     return { body: { error: `以下必填评审资料尚未上传：${names.join('、')}` }, statusCode: 400 }
   }
 
@@ -1604,21 +1752,21 @@ export async function startReview(req: any): Promise<PluginResponse> {
   const indicators = await qAll(indData, (v: any) => v.review_uuid === rid)
   const redIndicators = indicators.filter((ind: any) => ind.risk_color === 'red')
   if (redIndicators.length > 0) {
-    const allIndTpls = await qAll(indTpl)
-    const names = redIndicators.map((ind: any) => {
-      const tpl = allIndTpls.find((t: any) => t._key === ind.template_id)
-      return (tpl as any)?.indicator_name || ind.template_id
-    })
+    const names: string[] = []
+    for (const ind of redIndicators) {
+      const cfg = await getIndicatorThreshold(ind)
+      names.push(cfg?.indicator_name || ind.template_id)
+    }
     return { body: { error: `以下关键指标已超出红线阈值，请修正后再发起评审：${names.join('、')}` }, statusCode: 400 }
   }
 
   const now = Date.now()
-  // 初始化 checklist：从模板复制到 review.checklist_json
-  const phaseItems = await qAll(checkItem, (v: any) => v.phase_code === (rv as any).phase_code && (v.review_type || 'dcp') === reviewType)
+  // 初始化 checklist：从固化模板复制到 review.checklist_json（兜底实时模板）
+  const phaseItems = await getChecklistTemplatesForReview(rv)
   let checklistJson = (rv as any).checklist_json || '[]'
   if (phaseItems.length > 0) {
     const initList = phaseItems.map((item: any) => ({
-      template_id: item._key,
+      template_id: item.template_id || item._key,
       role_name: item.role_name,
       item_text: item.item_text,
       sort_order: item.sort_order,
@@ -1834,6 +1982,9 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
     file_name, file_data: object_key || ex.file_data || '', file_size: b.file_size || 0,
     uploaded_at: Date.now(),
     round_no: currentRoundNo,
+    // 保留固化字段
+    material_name: ex.material_name || '', required: ex.required ?? 0,
+    responsible_role: ex.responsible_role || '', sort_order: ex.sort_order ?? 0,
   })
   await writeAudit(rid, b.operator_uuid || b.updated_by || '', '上传材料', template_id,
     `上传材料文件: ${file_name}`)
@@ -1872,6 +2023,9 @@ export async function removeMaterialFile(req: any): Promise<PluginResponse> {
     updated_by: b.updated_by || '', updated_at: Date.now(),
     file_name: '', file_data: '', file_size: 0,
     uploaded_at: 0,
+    // 保留固化字段
+    material_name: ex.material_name || '', required: ex.required ?? 0,
+    responsible_role: ex.responsible_role || '', sort_order: ex.sort_order ?? 0,
   })
   await writeAudit(rid, b.operator_uuid || b.updated_by || '', '删除材料', template_id,
     `清除材料文件`)
@@ -1997,7 +2151,11 @@ export async function updateMaterialStatus(req: any): Promise<PluginResponse> {
     notes: notes ?? (ex as any).notes ?? '',
     updated_by: b.updated_by || '', updated_at: Date.now(),
     file_name: (ex as any).file_name ?? '',
+    file_data: (ex as any).file_data ?? '',
     file_size: (ex as any).file_size ?? 0, uploaded_at: (ex as any).uploaded_at ?? 0,
+    // 保留固化字段
+    material_name: (ex as any).material_name || '', required: (ex as any).required ?? 0,
+    responsible_role: (ex as any).responsible_role || '', sort_order: (ex as any).sort_order ?? 0,
   })
   return { body: { ok: true } }
 }
@@ -2017,26 +2175,22 @@ export async function updateIndicators(req: any): Promise<PluginResponse> {
   if (rv.status === 'completed' || rv.status === 'rejected') {
     return { body: { error: '评审已结束，不可修改指标' }, statusCode: 403 }
   }
-  const now = Date.now(); const tpls = await qAll(indTpl)
+  const now = Date.now()
   for (const ind of indicators) {
     const key = `${rid}_ind_${ind.template_id}`
     const ex = await indData.get(key)
     if (!ex) continue
-    const tpl = tpls.find((t: any) => t._key === ind.template_id) as any
-    let color = 'green'; const v = Number(ind.current_value ?? 0)
-    if (tpl) {
-      if (tpl.threshold_type === '高于阈值预警') {
-        if (v > tpl.red_threshold) color = 'red'
-        else if (v > tpl.yellow_threshold) color = 'yellow'
-      } else if (tpl.threshold_type === '低于阈值预警') {
-        if (v < tpl.red_threshold) color = 'red'
-        else if (v < tpl.yellow_threshold) color = 'yellow'
-      }
-    }
+    const v = Number(ind.current_value ?? 0)
+    // 优先用实体固化的阈值计算颜色，旧数据回退实时模板
+    const color = await calcRiskColor(ex, v)
     await indData.set(key, {
       review_uuid: rid, template_id: ind.template_id, current_value: v,
       notes: ind.notes ?? (ex as any).notes ?? '', risk_color: color,
       updated_by: operator_uuid || '', updated_at: now,
+      // 保留固化字段（不覆盖）
+      indicator_name: (ex as any).indicator_name || '', threshold_type: (ex as any).threshold_type || '',
+      yellow_threshold: (ex as any).yellow_threshold ?? 0, red_threshold: (ex as any).red_threshold ?? 0,
+      sort_order: (ex as any).sort_order ?? 0,
     })
   }
   return { body: { ok: true } }
@@ -2060,7 +2214,7 @@ export async function updateReviewers(req: any): Promise<PluginResponse> {
   }
 
   const _rvType = (rv as any).review_type || 'dcp'
-  const roleTemplates = filterRolesByType(await qAll(roleTpl), _rvType)
+  const roleTemplates = await getRoleTemplatesForReview(rv)
   const roleNames = new Set(roleTemplates.map((r: any) => r.role_name))
   const normalized = reviewers
     .filter((r: any) => r && r.role_name && r.reviewer_uuid)
@@ -2284,7 +2438,7 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
   const _pubRole = _rule ? getPublisherRole(_rule) : ''
   let _ready = false
   if (_pubRole && updatedSnap.length > 0) {
-    const _allRoleTpls = filterRolesByType(await qAll(roleTpl), _rvType)
+    const _allRoleTpls = await getRoleTemplatesForReview(rv)
     _ready = isResolutionReady(_rule, updatedSnap, _allRoleTpls)
   }
   // 合并 review.set：快照更新 + 可能的状态流转
@@ -2629,10 +2783,8 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     return { body: { error: `当前用户不是该评审单的决议人（决议角色：${publisherRole}），不能发布决议` }, statusCode: 403 }
   }
 
-  // 按 review_type 过滤角色模板
-  const roleTemplates = filterRolesByType(await qAll(roleTpl), reviewType)
-
-  // 校验：提交要求
+  // 按评审单固化的角色模板
+  const roleTemplates = await getRoleTemplatesForReview(rv)
   const submitMode = rule.submitRequirement.mode || 'must_vote_roles'
   if (submitMode === 'must_vote_roles') {
     const mustVoteRoleNames = (rule._frozen?.mustVoteRoleNames) || roleTemplates.filter((rt: any) => rt.must_vote).map((rt: any) => rt.role_name)
@@ -3000,7 +3152,7 @@ export async function remindReview(req: any): Promise<PluginResponse> {
   }
 
   // target === 'resolution'：催办决议人
-  const roleTemplates = filterRolesByType(await qAll(roleTpl), reviewType)
+  const roleTemplates = await getRoleTemplatesForReview(rv)
   const ready = isResolutionReady(rule, reviewers, roleTemplates)
   if (!ready) {
     return { body: { error: '当前评审单尚未进入待决议状态' }, statusCode: 400 }
