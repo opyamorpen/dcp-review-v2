@@ -1657,6 +1657,7 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
 // 发起评审（draft → reviewing）
 // ============================================================
 export async function startReview(req: any): Promise<PluginResponse> {
+  try {
   const rid = getParam(req, 'review_uuid')
   if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
   const rv = await review.get(rid)
@@ -1799,6 +1800,11 @@ export async function startReview(req: any): Promise<PluginResponse> {
   }
 
   return { body: { ok: true, status: 'reviewing', review_state: 'reviewing' } }
+  } catch (e: any) {
+    const errDetail = e?.message || String(e)
+    Logger.error(`[DCP] startReview error: ${errDetail}`, e?.stack || '')
+    return { body: { error: `发起评审失败: ${errDetail}` }, statusCode: 500 }
+  }
 }
 
 // ============================================================
