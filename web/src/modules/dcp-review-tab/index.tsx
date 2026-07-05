@@ -1330,6 +1330,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; isRemediation?: b
   const [uploadMsg, setUploadMsg] = useState<Record<string, string>>({})
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; name: string } | null>(null)
 
   function downloadMaterial(templateId: string) {
     api.getMaterialDownloadUrl(data.review.review_uuid, templateId).then((r: any) => {
@@ -1358,12 +1359,35 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; isRemediation?: b
     }).catch(() => {})
   }
 
-  function batchDownloadMaterials() {
+  async function batchDownloadMaterials() {
     const files = mats.filter((m: any) => !!m.file_data)
     if (files.length === 0) return
-    files.forEach((m: any, idx: number) => {
-      setTimeout(() => downloadMaterial(m.template_id), idx * 800)
-    })
+    const errors: string[] = []
+    for (let i = 0; i < files.length; i++) {
+      const m = files[i]
+      const fileName = m.file_name || m.template?.material_name || `material_${i}`
+      setBatchProgress({ current: i + 1, total: files.length, name: fileName })
+      try {
+        const r: any = await api.getMaterialDownloadUrl(data.review.review_uuid, m.template_id)
+        if (!r.url) { errors.push(fileName); continue }
+        const resp = await fetch(r.url)
+        if (!resp.ok) { errors.push(fileName); continue }
+        const blob = await resp.blob()
+        const blobUrl = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = blobUrl
+        a.download = r.file_name || fileName
+        a.style.display = 'none'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+      } catch { errors.push(fileName) }
+    }
+    setBatchProgress(null)
+    if (errors.length > 0) {
+      setUploadMsg({ __batch: `${errors.length} 个文件下载失败: ${errors.join(', ')}` })
+    }
   }
 
   async function previewAttachment(objectKey: string, fileName: string) {
@@ -1455,7 +1479,23 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; isRemediation?: b
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
           <h4 style={S.sectionTitle}>交付物清单（已上传 {mats.filter((m: any) => !!m.file_data).length}/{mats.length}）</h4>
           {mats.filter((m: any) => !!m.file_data).length > 0 && (
-            <button style={{ ...S.btn(false), fontSize: 11 }} onClick={batchDownloadMaterials}>批量下载</button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {batchProgress && (
+                <span style={{ fontSize: 12, color: '#1677ff' }}>
+                  下载中 {batchProgress.current}/{batchProgress.total}: {batchProgress.name}
+                </span>
+              )}
+              <button
+                style={{ ...S.btn(false), fontSize: 11, opacity: batchProgress ? 0.6 : 1 }}
+                disabled={!!batchProgress}
+                onClick={batchDownloadMaterials}
+              >
+                {batchProgress ? '下载中...' : '批量下载'}
+              </button>
+            </div>
+          )}
+          {uploadMsg['__batch'] && (
+            <div style={{ fontSize: 12, marginTop: 4, color: '#ff4d4f' }}>{uploadMsg['__batch']}</div>
           )}
         </div>
         <div style={S.tableWrap}>
