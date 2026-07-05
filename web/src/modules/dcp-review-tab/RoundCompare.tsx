@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { api } from './api'
+import * as api from './api'
 
 const RISK_COLORS: Record<string, string> = { green: '#52c41a', yellow: '#faad14', red: '#ff4d4f' }
 const RISK_LABELS: Record<string, string> = { green: '达标', yellow: '风险', red: '不达标' }
