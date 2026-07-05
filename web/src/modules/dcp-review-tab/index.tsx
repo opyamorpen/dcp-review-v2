@@ -1894,14 +1894,16 @@ const LinkedIssuesPanel: React.FC<{ data: any; projectUuid: string; projectKey: 
         <div style={S.tableWrap}>
         <table style={S.table}>
           <thead><tr>
-            <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>类型</th>
+            <th style={S.th}>ID</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>工作项类型</th>
             <th style={{ ...S.th, width: 80 }}>状态</th><th style={{ ...S.th, width: 80 }}>创建者</th>
             <th style={{ ...S.th, width: 120 }}>记录时间</th>
           </tr></thead>
           <tbody>
             {issues.map((iss: any, i: number) => (
               <tr key={i}>
-                <td style={S.td}><code style={{ fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 12)}</code></td>
+                <td style={S.td}>
+                  <a href={taskUrl(iss)} target="_blank" style={{ color: '#1677ff', textDecoration: 'none', fontFamily: 'monospace', fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 12)}</a>
+                </td>
                 <td style={S.td}>
                   <a href={taskUrl(iss)} target="_blank" style={{ color: '#1677ff', textDecoration: 'none' }} rel="noreferrer">
                     {iss.issue_title || '-'}
@@ -2472,12 +2474,14 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
           <div style={S.tableWrap}>
           <table style={S.table}>
             <thead><tr>
-              <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>类型</th><th style={{ ...S.th, width: 80 }}>状态</th><th style={{ ...S.th, width: 80 }}>创建者</th>
+              <th style={S.th}>ID</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>工作项类型</th><th style={{ ...S.th, width: 80 }}>状态</th><th style={{ ...S.th, width: 80 }}>创建者</th>
             </tr></thead>
             <tbody>
               {issues.map((iss: any, i: number) => (
                 <tr key={i}>
-                  <td style={S.td}><code style={{ fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 12)}</code></td>
+                  <td style={S.td}>
+                    <a href={taskUrl(iss)} target="_blank" style={{ color: '#1677ff', textDecoration: 'none', fontFamily: 'monospace', fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 12)}</a>
+                  </td>
                   <td style={S.td}>
                     <a href={taskUrl(iss)} target="_blank" style={{ color: '#1677ff', textDecoration: 'none' }} rel="noreferrer">
                       {iss.issue_title || '-'}
