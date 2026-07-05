@@ -147,8 +147,9 @@ async function sendNotification(
       result.succeeded.push(key)
       Logger.info(`[DCP] Notification sent: ${key} to ${toUsers.length} users`)
     } catch (e: any) {
-      result.failed.push({ channel: key, error: e.message || String(e) })
-      Logger.error(`[DCP] Notification failed (${key}):`, e.message)
+      const errMsg = e?.message || e?.msg || (typeof e === 'string' ? e : JSON.stringify(e))
+      result.failed.push({ channel: key, error: errMsg })
+      Logger.error(`[DCP] Notification failed (${key}):`, errMsg)
     }
   }
   return result
@@ -1801,7 +1802,12 @@ export async function startReview(req: any): Promise<PluginResponse> {
 
   return { body: { ok: true, status: 'reviewing', review_state: 'reviewing' } }
   } catch (e: any) {
-    const errDetail = e?.message || String(e)
+    let errDetail: string
+    try {
+      if (e instanceof Error) errDetail = e.message
+      else if (typeof e === 'string') errDetail = e
+      else errDetail = JSON.stringify(e, Object.getOwnPropertyNames(e))
+    } catch { errDetail = String(e) }
     Logger.error(`[DCP] startReview error: ${errDetail}`, e?.stack || '')
     return { body: { error: `发起评审失败: ${errDetail}` }, statusCode: 500 }
   }
