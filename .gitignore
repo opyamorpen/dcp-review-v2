@@ -19,3 +19,4 @@ node_modules
 /web/dist
 /web/pkg
 /web/ones-plugin-node-host.log
+scripts/.env
