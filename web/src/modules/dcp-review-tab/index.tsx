@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import ReactDOM from 'react-dom'
 import { RemediationPanel } from './RemediationPanel'
+import { RoundCompare } from './RoundCompare'
 import * as api from './api'
 import { getTeamUUID, checkPermission } from '../../api'
 
@@ -71,7 +72,7 @@ async function copyReviewLink(reviewNumber: string, reviewUuid: string): Promise
   }
 }
 
-type TabKey = 'materials' | 'indicators' | 'reviewers' | 'remediation' | 'checklist' | 'resolution' | 'audit' | 'timeline'
+type TabKey = 'materials' | 'indicators' | 'reviewers' | 'remediation' | 'checklist' | 'resolution' | 'audit' | 'timeline' | 'compare'
 
 // ============================================================
 // 样式
@@ -629,9 +630,17 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     { key: 'remediation', label: '工作项', badge: (data.linked_issues || []).length },
     { key: 'checklist', label: 'Checklist', badge: data.checklist?.length },
     { key: 'resolution', label: '决议快照' },
+    { key: 'compare', label: '轮次对比' },
     { key: 'audit', label: '审计日志' },
     { key: 'timeline', label: '状态轨迹' },
-  ]
+  ].filter(t => {
+    if (t.key === 'compare') {
+      // 仅在≥2轮时显示：历史决议数+当前轮≥2
+      const totalRounds = (data.resolutions || []).length + (data.resolution ? 0 : 1)
+      return totalRounds >= 2 || (rv.round_no || 1) >= 2
+    }
+    return true
+  })
 
   const [showPublishForm, setShowPublishForm] = useState(false)
   const [resolutionForm, setResolutionForm] = useState({ final_conclusion: '', condition_notes: '' })
@@ -1263,6 +1272,11 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       {activeTab === 'resolution' && <div style={S.tabPanel}><ResolutionPanel data={data} onRefresh={onRefresh} /></div>}
       {activeTab === 'audit' && <div style={S.tabPanel}><AuditPanel reviewUuid={rv.review_uuid} /></div>}
       {activeTab === 'timeline' && <div style={S.tabPanel}><StateTimeline data={data} effState={effState} roundNo={rv.round_no || 1} /></div>}
+      {activeTab === 'compare' && (
+        <div style={S.tabPanel}>
+          <RoundCompare reviewUuid={rv.review_uuid} currentRoundNo={rv.round_no || 1} currentData={data} />
+        </div>
+      )}
       {activeTab === 'remediation' && (
         <div style={S.tabPanel}>
           <RemediationPanel
