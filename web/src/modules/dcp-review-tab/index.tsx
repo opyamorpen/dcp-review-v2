@@ -631,8 +631,8 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     { key: 'checklist', label: 'Checklist', badge: data.checklist?.length },
     { key: 'resolution', label: '决议快照' },
     { key: 'compare', label: '轮次对比' },
-    { key: 'audit', label: '审计日志' },
     { key: 'timeline', label: '状态轨迹' },
+    { key: 'audit', label: '审计日志' },
   ].filter(t => {
     if (t.key === 'compare') {
       // 仅在≥2轮时显示：历史决议数+当前轮≥2
