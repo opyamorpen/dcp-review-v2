@@ -477,7 +477,7 @@ const ReviewerWorkspace: React.FC<{
  const [opinionMsg, setOpinionMsg] = useState('')
  const [submittingOpinion, setSubmittingOpinion] = useState(false)
  const [opinionToast, setOpinionToast] = useState('')
- const [resolutionForm, setResolutionForm] = useState({ final_conclusion: 'pass', condition_notes: '' })
+ const [resolutionForm, setResolutionForm] = useState({ final_conclusion: '', condition_notes: '' })
  const [resolving, setResolving] = useState(false)
  const [resolutionMsg, setResolutionMsg] = useState('')
  const [resolvingProject, setResolvingProject] = useState(false)
@@ -1482,6 +1482,7 @@ const res = data.resolution
  <div style={S.formGroup}>
  <label style={S.label}>最终结论 *</label>
  <select style={{ ...S.select, width: '100%' }} value={resolutionForm.final_conclusion} onChange={e => setResolutionForm({ ...resolutionForm, final_conclusion: e.target.value })}>
+ <option value="" disabled>请选择结论</option>
  {(resolutionRule?.allowedConclusions || ['pass', 'conditional_pass', 'reject']).map((c: string) => {
  const labels: any = { pass: '✅ 通过', conditional_pass: '⚠️ 有条件通过', reject: '❌ 驳回', fail: '❌ 不通过', rework: '🔧 返工' }
  return <option key={c} value={c}>{labels[c] || c}</option>

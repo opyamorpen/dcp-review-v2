@@ -634,7 +634,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   ]
 
   const [showPublishForm, setShowPublishForm] = useState(false)
-  const [resolutionForm, setResolutionForm] = useState({ final_conclusion: 'pass', condition_notes: '' })
+  const [resolutionForm, setResolutionForm] = useState({ final_conclusion: '', condition_notes: '' })
   const [publishing, setPublishing] = useState(false)
   const [copyToast, setCopyToast] = useState('')
   const [currentUser, setCurrentUser] = useState<{ uuid: string; name: string }>({ uuid: '', name: '' })
@@ -1173,6 +1173,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
             <div style={S.formGroup}>
               <label style={S.label}>最终结论 *</label>
               <select style={{ ...S.select, width: '100%' }} value={resolutionForm.final_conclusion} onChange={e => setResolutionForm({ ...resolutionForm, final_conclusion: e.target.value })}>
+                <option value="" disabled>请选择结论</option>
                 {(resolutionRule?.allowedConclusions || ['pass', 'conditional_pass', 'reject']).map((c: string) => {
                   const labels: any = { pass: '✅ 通过', conditional_pass: '⚠️ 有条件通过', reject: '❌ 驳回', fail: '❌ 不通过', rework: '🔧 返工' }
                   return <option key={c} value={c}>{labels[c] || c}</option>
