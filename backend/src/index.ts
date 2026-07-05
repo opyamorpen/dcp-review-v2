@@ -74,6 +74,15 @@ function jsonArr(s: string): any[] {
   try { const a = JSON.parse(s); return Array.isArray(a) ? a : [] } catch { return [] }
 }
 
+// 清理实体写入对象：ONES KV 存储不允许 null/undefined 值，写入前必须过滤
+function cleanForSet(obj: any): any {
+  const out: any = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== null && v !== undefined) out[k] = v
+  }
+  return out
+}
+
 function makeUuid(): string {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`
 }
@@ -322,7 +331,7 @@ export async function Enable() {
     for (const rv of allReviews) {
       if (rv.review_state) continue  // 已有 review_state，跳过
       const derivedState = getEffectiveState(rv)
-      await review.set(rv.review_uuid, {
+      await review.set(rv.review_uuid, cleanForSet({
         ...rv,
         review_state: derivedState,
         round_no: Number(rv.round_no) || 1,
@@ -335,7 +344,7 @@ export async function Enable() {
           round_no: Number(rv.round_no) || 1,
           from_state: '',
         }]),
-      })
+      }))
       migrated++
     }
     if (migrated > 0) {
@@ -1052,7 +1061,7 @@ export async function createReview(req: any): Promise<PluginResponse> {
     item_text: c.item_text, sort_order: c.sort_order ?? 0,
   })))
 
-  await review.set(rvUuid, {
+  await review.set(rvUuid, cleanForSet({
     review_uuid: rvUuid, project_uuid, phase_code,
     review_title: review_title || 'DCP评审', meeting_time: meeting_time || 0,
     status: 'draft',
@@ -1072,7 +1081,7 @@ export async function createReview(req: any): Promise<PluginResponse> {
     config_version_note: '按创建时配置执行',
     role_templates_json: roleTemplatesJson,
     checklist_templates_json: checklistTemplatesJson,
-  })
+  }))
   // 带出材料模板（含固化的名称/必填/责任角色/排序）
   const mats = await qAll(matTpl, (v: any) => jsonArr(v.applicable_phases).includes(phase_code) && (v.review_type || 'dcp') === reviewType)
   for (const m of mats) {
@@ -1203,7 +1212,7 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
     item_text: c.item_text, sort_order: c.sort_order ?? 0,
   })))
 
-  await review.set(newRid, {
+  await review.set(newRid, cleanForSet({
     review_uuid: newRid,
     project_uuid: srcRv.project_uuid,
     phase_code: srcRv.phase_code,
@@ -1228,7 +1237,7 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
     config_version_note: '按创建时配置执行',
     role_templates_json: roleTemplatesJson,
     checklist_templates_json: checklistTemplatesJson,
-  })
+  }))
 
   // 以新模板为准重新带出材料，源单文件按 template_id 匹配保留
   const srcMats = await qAll(matItem, (v: any) => v.review_uuid === srcRid)
@@ -1780,7 +1789,7 @@ export async function startReview(req: any): Promise<PluginResponse> {
   }
   const opUuid = (req.body || {} as any).operator_uuid || ''
   const stateFields = buildStateTransition(rv, 'reviewing', opUuid, '发起评审', { checklist_json: checklistJson })
-  await review.set(rid, { ...rv, ...stateFields })
+  await review.set(rid, cleanForSet({ ...rv, ...stateFields }))
   await writeAudit(rid, opUuid, '启动评审', rid,
     `评审已发起，共 ${reviewers.length} 名评审人`)
 
@@ -1895,7 +1904,7 @@ export async function recallReview(req: any): Promise<PluginResponse> {
     reviewers_json: JSON.stringify(resetReviewers),
   })
   // canceled 的兼容 status = draft
-  await review.set(rid, { ...rv, ...stateFields })
+  await review.set(rid, cleanForSet({ ...rv, ...stateFields }))
 
   await writeAudit(rid, operator_uuid, '撤回评审', rid,
     `评审已撤回，回到草稿状态。原因：${reason || '未填写'}`)
@@ -1953,7 +1962,7 @@ export async function updateReviewBasicInfo(req: any): Promise<PluginResponse> {
     next.review_title = review_title.trim() || rv.review_title
   }
 
-  await review.set(rid, next)
+  await review.set(rid, cleanForSet(next))
 
   await writeAudit(rid, operator_uuid, '修改会议时间', rid,
     `会议时间修改为: ${next.meeting_time ? new Date(next.meeting_time).toLocaleString('zh-CN') : '未设置'}`)
@@ -2380,7 +2389,7 @@ export async function updateReviewers(req: any): Promise<PluginResponse> {
 
   // 写 reviewers_json 快照到 dcp_review（兜底读取）
   try {
-    await review.set(rid, { ...rv, reviewers_json: JSON.stringify(savedPayload), updated_at: Date.now() })
+    await review.set(rid, cleanForSet({ ...rv, reviewers_json: JSON.stringify(savedPayload), updated_at: Date.now() }))
   } catch {}
 
   await writeAudit(rid, (req.body || {} as any).operator_uuid || '', '更新评审人', rid,
@@ -2537,7 +2546,7 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
     }
   }
   try {
-    await review.set(rid, reviewUpdate)
+    await review.set(rid, cleanForSet(reviewUpdate))
   } catch (e: any) {
     Logger.info(`[DCP] submitOpinion review.set failed (snapshot may be stale): ${e?.message || e}`)
   }
@@ -3012,7 +3021,7 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   }
   const fcLabel = normalizedFc === 'pass' ? '通过' : normalizedFc === 'conditional_pass' ? '有条件通过' : normalizedFc === 'fail' ? '不通过' : normalizedFc === 'rework' ? '返工' : '驳回'
   const stateFields = buildStateTransition(rv, targetState, puuid, `决议：${fcLabel}`)
-  await review.set(rid, { ...rv, ...stateFields })
+  await review.set(rid, cleanForSet({ ...rv, ...stateFields }))
   await writeAudit(rid, puuid, '发布决议', rid,
     `决议已发布: ${normalizedFc} [${snapshotNumber}]`)
 
@@ -3126,7 +3135,7 @@ export async function checkChecklist(req: any): Promise<PluginResponse> {
   }
 
   cl[idx] = { ...item, status, checked_by: reviewer_uuid, checked_at: Date.now() }
-  await review.set(rid, { ...rv, checklist_json: JSON.stringify(cl), updated_at: Date.now() })
+  await review.set(rid, cleanForSet({ ...rv, checklist_json: JSON.stringify(cl), updated_at: Date.now() }))
   return { body: { ok: true, item: cl[idx] } }
 }
 
@@ -3504,7 +3513,7 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
   }
 
   const stateFields = buildStateTransition(rv, target_state, operator_uuid, reason || `手动流转: ${currentState} → ${target_state}`, extra)
-  await review.set(rid, { ...rv, ...stateFields })
+  await review.set(rid, cleanForSet({ ...rv, ...stateFields }))
   await writeAudit(rid, operator_uuid, '状态流转', target_state,
     `${currentState} → ${target_state}${reason ? ' | ' + reason : ''}`)
 
@@ -4052,12 +4061,12 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
     for (const item of cl) { item.status = 'unchecked'; item.checked_by = ''; item.checked_at = 0 }
     stateFields.checklist_json = JSON.stringify(cl)
   }
-  await review.set(rid, {
+  await review.set(rid, cleanForSet({
     ...rv,
     ...stateFields,
     round_no: newRoundNo,
     reviewers_json: newReviewersJson,
-  })
+  }))
 
   await writeAudit(rid, publisher_uuid, '确认整改完成', rid,
     `整改项 ${syncedItems.length} 个全部完成，${next_action === 're_review' ? '进入复审' : '评审完成'}`)
