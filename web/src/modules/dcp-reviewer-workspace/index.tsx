@@ -1044,7 +1044,6 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  <div>
  <span style={{ fontFamily: 'monospace', fontSize: 13, color: '#1677ff', fontWeight: 600, marginRight: 8, cursor: 'pointer' }} title="点击复制编号" onClick={() => copyReviewLink(rv.review_number || rv.review_uuid, rv.review_uuid)}>{rv.review_number || ''}</span>
  <strong style={{ fontSize: 16 }}>{rv.phase_name || rv.phase_code} — {rv.review_title || 'DCP评审'}</strong>
- <span style={S.statusTag('#1677ff')}>评审中</span>
  </div>
  <div style={{ fontSize: 12, color: '#666' }}>
  项目: {projectDisplayName} | 创建: {rv.created_at ? new Date(rv.created_at).toLocaleString('zh-CN') : '-'}
