@@ -56,7 +56,7 @@ export const RemediationPanel: React.FC<{
     const isRemediation = iss.link_type === 'remediation'
     return (
       <tr key={i}>
-        <td style={S.td}>{iss.issue_number || '-'}</td>
+        <td style={S.td}><a href={`/project/#/team/${getTeamUUID()}/project/${props.projectUuid}/issue/${iss.issue_number || iss.issue_uuid}`} target="_blank" style={{ color: '#1677ff', textDecoration: 'none', fontFamily: 'monospace', fontSize: 11 }}>{iss.issue_number || '-'}</a></td>
         <td style={S.td}>{iss.issue_title || '-'}</td>
         <td style={S.td}>{iss.issue_type || '-'}</td>
         <td style={S.td}>
@@ -102,7 +102,7 @@ export const RemediationPanel: React.FC<{
           <div style={S.tableWrap}>
             <table style={S.table}>
               <thead><tr>
-                <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={S.th}>类型</th><th style={S.th}>状态</th><th style={S.th}>分类</th><th style={S.th}>锁定</th>
+                <th style={S.th}>ID</th><th style={S.th}>标题</th><th style={S.th}>工作项类型</th><th style={S.th}>状态</th><th style={S.th}>分类</th><th style={S.th}>锁定</th>
               </tr></thead>
               <tbody>{issueRows}</tbody>
             </table>
