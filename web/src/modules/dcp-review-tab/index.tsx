@@ -1337,7 +1337,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; isRemediation?: b
       // 用隐藏 <a download> 在当前窗口触发下载，不开新标签
       const a = document.createElement('a')
       a.href = r.url
-      a.download = ''
+      a.download = r.file_name || ''
       a.style.display = 'none'
       document.body.appendChild(a)
       a.click()
@@ -1350,7 +1350,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; isRemediation?: b
       if (!r.url) return
       const a = document.createElement('a')
       a.href = r.url
-      a.download = ''
+      a.download = r.file_name || ''
       a.style.display = 'none'
       document.body.appendChild(a)
       a.click()
@@ -2232,7 +2232,7 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
       if (!r.url) return
       const a = document.createElement('a')
       a.href = r.url
-      a.download = ''
+      a.download = r.file_name || ''
       a.style.display = 'none'
       document.body.appendChild(a)
       a.click()
@@ -2245,7 +2245,7 @@ const ReviewerWorkspace: React.FC<{ data: any; projectUuid: string; onRefresh: (
       if (!r.url) return
       const a = document.createElement('a')
       a.href = r.url
-      a.download = ''
+      a.download = r.file_name || ''
       a.style.display = 'none'
       document.body.appendChild(a)
       a.click()

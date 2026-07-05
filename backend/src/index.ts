@@ -2119,7 +2119,7 @@ export async function getMaterialDownloadUrl(req: any): Promise<PluginResponse> 
   if (result?.code) {
     return { body: { error: `获取下载地址失败: ${result.message || result.code}` }, statusCode: 500 }
   }
-  return { body: { url: result.getWebUrl() }}
+  return { body: { url: result.getWebUrl(), file_name: ex.file_name || '' }}
 }
 
 // ============================================================
@@ -2176,12 +2176,20 @@ export async function getAttachmentDownloadUrl(req: any): Promise<PluginResponse
   const rid = getParam(req, 'review_uuid')
   const objKey = (getParam(req, 'object_key') || (req.query as any)?.object_key || '') as string
   if (!rid || !objKey) return { body: { error: '缺少 object_key' }, statusCode: 400 }
+  // 从材料实体的 attachments_json 中查找原始文件名
+  let fileName = ''
+  const allMats = await qAll(matItem, (v: any) => v.review_uuid === rid)
+  for (const m of allMats) {
+    const atts = jsonArr(m.attachments_json || '[]')
+    const found = atts.find((a: any) => a.object_key === objKey || a.key === objKey)
+    if (found) { fileName = found.file_name || found.name || ''; break }
+  }
   const { object } = storage
   const result = await object.download(objKey) as any
   if (result?.code) {
     return { body: { error: `获取下载地址失败: ${result.message || result.code}` }, statusCode: 500 }
   }
-  return { body: { url: result.getWebUrl() } }
+  return { body: { url: result.getWebUrl(), file_name: fileName }}
 }
 
 export async function getAttachmentPreview(req: any): Promise<PluginResponse> {

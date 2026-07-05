@@ -825,7 +825,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  // 用隐藏 <a download> 在当前窗口触发下载，不开新标签
  const a = document.createElement('a')
  a.href = r.url
- a.download = ''
+ a.download = r.file_name || ''
  a.style.display = 'none'
  document.body.appendChild(a)
  a.click()
@@ -838,7 +838,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  if (!r.url) return
  const a = document.createElement('a')
  a.href = r.url
- a.download = ''
+ a.download = r.file_name || ''
  a.style.display = 'none'
  document.body.appendChild(a)
  a.click()
