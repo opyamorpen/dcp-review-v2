@@ -1144,7 +1144,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  {(canPublish ? allIssues : myIssues).length === 0 ? <div style={{ color: '#999', padding: 12, textAlign: 'center', fontSize: 13 }}>{canPublish ? '暂无整改项' : (allIssues.length > 0 ? '其他评审人已创建工作项，你尚未创建' : '暂无关联工作项')}</div> :
  <table style={S.table}>
  <thead><tr>
- <th style={S.th}>ID</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>工作项类型</th><th style={{ ...S.th, width: 80 }}>状态</th><th style={{ ...S.th, width: 80 }}>创建者</th>
+ <th style={{ ...S.th, width: 60 }}>ID</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 110 }}>工作项类型</th><th style={{ ...S.th, width: 80 }}>状态</th><th style={{ ...S.th, width: 80 }}>创建者</th>
  </tr></thead>
  <tbody>
  {(canPublish ? allIssues : myIssues).map((iss: any, i: number) => (

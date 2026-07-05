@@ -2048,7 +2048,7 @@ function SnapshotSections({ res, defaultExpanded, projectUuid }: { res: any; def
               <div style={{ fontWeight: 600, fontSize: 12, color: '#666', marginBottom: 4 }}>整改工作项</div>
               <table style={S.table}>
                 <thead><tr>
-                  <th style={S.th}>ID</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>状态</th>
+                  <th style={{ ...S.th, width: 60 }}>ID</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>状态</th>
                   <th style={{ ...S.th, width: 80 }}>创建者</th><th style={{ ...S.th, width: 60, textAlign: 'center' }}>锁定</th>
                 </tr></thead>
                 <tbody>
