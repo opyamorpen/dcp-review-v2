@@ -1789,7 +1789,7 @@ export async function startReview(req: any): Promise<PluginResponse> {
     if (uuids.length > 0) {
       const phaseName = (rv as any).phase_code || ''
       const reviewTitle = (rv as any).review_title || 'DCP评审'
-      sendNotification(
+      await sendNotification(
         `DCP评审通知 — ${phaseName}`,
         `您被指定为「${phaseName} ${reviewTitle}」的评审人，请前往评审工作台提交评审意见。`,
         `${(rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : ''}`,
@@ -3020,7 +3020,7 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     if (notUsers.length > 0) {
       const phaseName = (rv as any).phase_code || ''
       const fcLabel = normalizedFc === 'pass' ? '通过' : normalizedFc === 'conditional_pass' ? '有条件通过' : normalizedFc === 'fail' ? '不通过' : normalizedFc === 'rework' ? '返工' : '驳回'
-      sendNotification(
+      await sendNotification(
         `${reviewType.toUpperCase()}决议结果 — ${phaseName}`,
         `「${phaseName}」决议已发布：${fcLabel}。详情请查看评审单。`,
         `${(rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : ''}`,
@@ -3513,7 +3513,7 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
       if (reviewerUuids.length > 0) {
         const phaseName = (rv as any).phase_code || ''
         const reviewTitle = (rv as any).review_title || '评审'
-        sendNotification(
+        await sendNotification(
           `复审通知 — ${phaseName}`,
           `「${phaseName} ${reviewTitle}」已进入第${stateFields.round_no}轮复审，请前往评审工作台重新提交评审意见。`,
           `${(rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : ''}`,
@@ -3721,7 +3721,7 @@ export async function onIssueStatusChanged(payload: any) {
           if (notCfg.enabled && notifyTargets.length > 0) {
             const phaseName = (rv as any).phase_code || ''
             const title = (rv as any).review_title || phaseName
-            sendNotification(
+            await sendNotification(
               `${((rv as any).review_type || 'dcp').toUpperCase()}评审整改完成 — ${phaseName}`,
               `「${title}」的 ${allRemediation.length} 个整改项已全部完成，请确认。`,
               (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
@@ -3869,7 +3869,7 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
         if (notCfg.enabled && notifyTargets.length > 0) {
           const phaseName = (rv as any).phase_code || ''
           const title = (rv as any).review_title || phaseName
-          sendNotification(
+          await sendNotification(
             `${((rv as any).review_type || 'dcp').toUpperCase()}评审整改完成 — ${phaseName}`,
             `「${title}」的 ${updated.length} 个整改项已全部完成，请确认。`,
             (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
@@ -4055,7 +4055,7 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
   if (notCfg.enabled) {
     const ownerUUIDs = [...new Set(syncedItems.map((v: any) => v.linked_by).filter(Boolean))] as string[]
     if (ownerUUIDs.length > 0) {
-      sendNotification(
+      await sendNotification(
         `${((rv as any).review_type || 'dcp').toUpperCase()}整改已确认 — ${(rv as any).phase_code || ''}`,
         `「${(rv as any).review_title || (rv as any).phase_code}」整改已由决议人确认完成，关联工作项已锁定。`,
         (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
@@ -4079,7 +4079,7 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
     if (reviewerUuids.length > 0) {
       const phaseName = (rv as any).phase_code || ''
       const reviewTitle = (rv as any).review_title || '评审'
-      sendNotification(
+      await sendNotification(
         `复审通知 — ${phaseName}`,
         `「${phaseName} ${reviewTitle}」整改已完成，进入第${newRoundNo}轮复审，请前往评审工作台重新提交评审意见。`,
         (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
