@@ -113,6 +113,8 @@ export const removeMaterialFile = (uuid: string, data: any) => callApi(`/dcp/rev
 export const getMaterialUploadUrl = (reviewUuid: string, templateId: string) => callApi(`/dcp/review/${reviewUuid}/material/${templateId}/upload-url`)
 export const getMaterialDownloadUrl = (reviewUuid: string, templateId: string) => callApi(`/dcp/review/${reviewUuid}/material/${templateId}/download-url`)
 export const getMaterialPreview = (reviewUuid: string, templateId: string) => callApi(`/dcp/review/${reviewUuid}/material/${templateId}/preview`)
+export const getAttachmentDownloadUrl = (reviewUuid: string, objectKey: string) => callApi(`/dcp/review/${reviewUuid}/material-attachment/download-url?object_key=${encodeURIComponent(objectKey)}`)
+export const getAttachmentPreview = (reviewUuid: string, objectKey: string, fileName: string) => callApi(`/dcp/review/${reviewUuid}/material-attachment/preview?object_key=${encodeURIComponent(objectKey)}&file_name=${encodeURIComponent(fileName)}`)
 export const updateIndicators = (uuid: string, data: any) => callApi(`/dcp/review/${uuid}/indicators`, { method: 'POST', body: JSON.stringify(data) })
 
 // ---- 评审人 & 意见 ----

@@ -102,6 +102,7 @@ declare var ONESEntities: {
             required?: number;
             responsible_role?: string;
             sort_order?: number;
+            attachments_json?: string;
         };
         indexes: null;
     };

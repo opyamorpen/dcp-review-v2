@@ -1961,33 +1961,53 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
   }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
-  // 材料权限：仅 reviewing（第1轮）或 remediation_pending（整改轮）可上传
+  // 材料权限：草稿/就绪可覆盖式上传；整改期间可追加（旧文件推入 attachments_json）
   const effState = getEffectiveState(rv)
   const currentRoundNo = (rv as any).round_no || 1
   const canUpload =
-    (effState === 'reviewing' && currentRoundNo === 1) ||
-    effState === 'remediation_pending' ||
-    effState === 'draft'
+    effState === 'draft' ||
+    effState === 'ready' ||
+    effState === 'remediation_pending'
   if (!canUpload) {
-    return { body: { error: '当前状态下不可修改材料' }, statusCode: 403 }
+    return { body: { error: '评审已发起，材料不可修改' }, statusCode: 403 }
   }
   const key = `${rid}_mat_${template_id}`
   const ex = (await matItem.get(key)) as any
   if (!ex) return { body: { error: '材料项不存在' }, statusCode: 404 }
+  const now = Date.now()
+
+  // 整改期间追加：旧当前文件推入 attachments_json，新文件成为当前版
+  let attachments = jsonArr((ex as any).attachments_json || '[]')
+  if (effState === 'remediation_pending' && ex.file_data) {
+    attachments.push({
+      file_name: ex.file_name || '',
+      file_data: ex.file_data || '',
+      file_size: Number(ex.file_size || 0),
+      uploaded_by: ex.updated_by || '',
+      uploaded_at: Number(ex.uploaded_at || 0),
+      round_no: Number(ex.round_no || 1),
+      replaced_at: now,
+      replaced_in_round: currentRoundNo,
+    })
+  }
+
   await matItem.set(key, {
     review_uuid: rid, template_id,
     submit_status: (ex.submit_status === 'approved' || ex.submit_status === 'rejected') ? ex.submit_status : 'submitted',
     notes: ex.notes ?? '',
-    updated_by: b.updated_by || '', updated_at: Date.now(),
+    updated_by: b.updated_by || '', updated_at: now,
     file_name, file_data: object_key || ex.file_data || '', file_size: b.file_size || 0,
-    uploaded_at: Date.now(),
+    uploaded_at: now,
     round_no: currentRoundNo,
     // 保留固化字段
     material_name: ex.material_name || '', required: ex.required ?? 0,
     responsible_role: ex.responsible_role || '', sort_order: ex.sort_order ?? 0,
+    // 历史附件（整改追加的旧文件）
+    attachments_json: JSON.stringify(attachments),
   })
-  await writeAudit(rid, b.operator_uuid || b.updated_by || '', '上传材料', template_id,
-    `上传材料文件: ${file_name}`)
+  const auditAction = effState === 'remediation_pending' && ex.file_data ? '整改材料追加' : '上传材料'
+  await writeAudit(rid, b.operator_uuid || b.updated_by || '', auditAction, template_id,
+    `${auditAction}: ${file_name}`)
   return { body: { ok: true, file_name } }
 }
 
@@ -2003,15 +2023,13 @@ export async function removeMaterialFile(req: any): Promise<PluginResponse> {
   }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
-  // 材料删除：仅 draft / reviewing（第1轮）/ remediation_pending 可操作
+  // 材料删除：仅 draft / ready 可操作（发起评审后材料锁定）
   const effState = getEffectiveState(rv)
-  const currentRoundNo = (rv as any).round_no || 1
   const canRemove =
     effState === 'draft' ||
-    (effState === 'reviewing' && currentRoundNo === 1) ||
-    effState === 'remediation_pending'
+    effState === 'ready'
   if (!canRemove) {
-    return { body: { error: '当前状态下不可清除文件' }, statusCode: 403 }
+    return { body: { error: '评审已发起，材料不可删除' }, statusCode: 403 }
   }
   const key = `${rid}_mat_${template_id}`
   const ex = (await matItem.get(key)) as any
@@ -2026,6 +2044,8 @@ export async function removeMaterialFile(req: any): Promise<PluginResponse> {
     // 保留固化字段
     material_name: ex.material_name || '', required: ex.required ?? 0,
     responsible_role: ex.responsible_role || '', sort_order: ex.sort_order ?? 0,
+    // 草稿阶段清空也清除历史附件
+    attachments_json: '[]',
   })
   await writeAudit(rid, b.operator_uuid || b.updated_by || '', '删除材料', template_id,
     `清除材料文件`)
@@ -2106,6 +2126,58 @@ export async function getMaterialPreview(req: any): Promise<PluginResponse> {
     const buf = Buffer.from(fetchRes.data as ArrayBuffer)
     const base64 = buf.toString('base64')
     // 根据文件扩展名推断 MIME
+    const ext = fileName.split('.').pop()?.toLowerCase() || ''
+    const mimeMap: Record<string, string> = {
+      pdf: 'application/pdf',
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+      bmp: 'image/bmp', webp: 'image/webp', svg: 'image/svg+xml',
+      txt: 'text/plain', csv: 'text/csv',
+      doc: 'application/msword',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xls: 'application/vnd.ms-excel',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      ppt: 'application/vnd.ms-powerpoint',
+      pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      zip: 'application/zip', rar: 'application/x-rar-compressed',
+      '7z': 'application/x-7z-compressed',
+    }
+    const mime = mimeMap[ext] || 'application/octet-stream'
+    return { body: { content: base64, mime, file_name: fileName } }
+  } catch (e: any) {
+    return { body: { error: `预览获取失败: ${e.message || e}` }, statusCode: 500 }
+  }
+}
+
+// ============================================================
+// 历史附件下载/预览（按对象存储 key 直接获取，用于整改追加的旧版本文件）
+// ============================================================
+export async function getAttachmentDownloadUrl(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  const objKey = (getParam(req, 'object_key') || (req.query as any)?.object_key || '') as string
+  if (!rid || !objKey) return { body: { error: '缺少 object_key' }, statusCode: 400 }
+  const { object } = storage
+  const result = await object.download(objKey) as any
+  if (result?.code) {
+    return { body: { error: `获取下载地址失败: ${result.message || result.code}` }, statusCode: 500 }
+  }
+  return { body: { url: result.getWebUrl() } }
+}
+
+export async function getAttachmentPreview(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  const objKey = (getParam(req, 'object_key') || (req.query as any)?.object_key || '') as string
+  const fileName = (getParam(req, 'file_name') || (req.query as any)?.file_name || 'unknown') as string
+  if (!rid || !objKey) return { body: { error: '缺少 object_key' }, statusCode: 400 }
+  const { object } = storage
+  const result = await object.download(objKey) as any
+  if (result?.code) {
+    return { body: { error: `获取下载地址失败: ${result.message || result.code}` }, statusCode: 500 }
+  }
+  const internalUrl = result.getUrl()
+  try {
+    const fetchRes = await OPFetch(internalUrl, { responseType: 'arraybuffer', timeout: 30000 } as any)
+    const buf = Buffer.from(fetchRes.data as ArrayBuffer)
+    const base64 = buf.toString('base64')
     const ext = fileName.split('.').pop()?.toLowerCase() || ''
     const mimeMap: Record<string, string> = {
       pdf: 'application/pdf',
@@ -2848,12 +2920,25 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   // 决议实体 — 多轮使用轮次相关 key
   const resKey = currentRoundNo > 1 ? `${rid}_r${currentRoundNo}` : rid
 
-  // 冻结快照：指标、checklist、整改工作项（与评审人意见一起留存到 based_on_votes）
-  const [snapIndicators, snapChecklistRaw, snapIssues] = await Promise.all([
+  // 冻结快照：材料、指标、checklist、整改工作项（与评审人意见一起留存到 based_on_votes）
+  const [snapMaterials, snapIndicators, snapChecklistRaw, snapIssues] = await Promise.all([
+    qAll(matItem, (v: any) => v.review_uuid === rid),
     qAll(indData, (v: any) => v.review_uuid === rid),
     Promise.resolve((rv as any).checklist_json || '[]'),
     qAll(linkedIssue, (v: any) => v.review_uuid === rid),
   ])
+  const snapshotMaterials = snapMaterials.map((m: any) => ({
+    template_id: m.template_id || '',
+    material_name: m.material_name || '',
+    required: Number(m.required || 0),
+    responsible_role: m.responsible_role || '',
+    file_name: m.file_name || '',
+    file_data: m.file_data || '',
+    file_size: Number(m.file_size || 0),
+    uploaded_at: Number(m.uploaded_at || 0),
+    round_no: Number(m.round_no || currentRoundNo),
+    attachment_count: jsonArr(m.attachments_json || '[]').length,
+  }))
   const allIndTpls = await qAll(indTpl)
   const snapshotIndicators = snapIndicators.map((ind: any) => {
     // 优先读评审单指标实体的固化字段，旧数据无固化时回退实时模板
@@ -2891,6 +2976,7 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
       indicators: snapshotIndicators,
       checklist: snapshotChecklist,
       issues: snapshotIssues,
+      materials: snapshotMaterials,
     }),
     snapshot_number: snapshotNumber,
     published_by: puuid,

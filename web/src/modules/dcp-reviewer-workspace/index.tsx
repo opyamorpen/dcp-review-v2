@@ -833,6 +833,36 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  }).catch(() => {})
  }
 
+ function downloadAttachment(objectKey: string) {
+ callApi(`/dcp/review/${rv.review_uuid}/material-attachment/download-url?object_key=${encodeURIComponent(objectKey)}`).then((r: any) => {
+ if (!r.url) return
+ const a = document.createElement('a')
+ a.href = r.url
+ a.download = ''
+ a.style.display = 'none'
+ document.body.appendChild(a)
+ a.click()
+ document.body.removeChild(a)
+ }).catch(() => {})
+ }
+
+ async function previewAttachment(objectKey: string, fileName: string) {
+ setPreviewLoading(true)
+ try {
+ const r: any = await callApi(`/dcp/review/${rv.review_uuid}/material-attachment/preview?object_key=${encodeURIComponent(objectKey)}&file_name=${encodeURIComponent(fileName)}`)
+ if (r.content) {
+ const previewable = ['application/pdf', 'image/png', 'image/jpeg', 'image/gif', 'image/bmp', 'image/webp', 'image/svg+xml', 'text/plain', 'text/csv']
+ if (previewable.includes(r.mime)) {
+ const dataUrl = `data:${r.mime};base64,${r.content}`
+ setPreview({ url: dataUrl, name: fileName })
+ } else {
+ setPreview({ url: `__unsupported__`, name: fileName })
+ }
+ }
+ } catch { /* ignore */ }
+ finally { setPreviewLoading(false) }
+ }
+
  async function previewMaterial(templateId: string, fileName: string) {
  setPreviewLoading(true)
  try {
@@ -1033,14 +1063,29 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  <tbody>
  {mats.length === 0 ? <tr><td colSpan={2} style={{ ...S.td, textAlign: 'center', color: '#999' }}>无</td></tr> :
  mats.map((m: any, i: number) => {
+ const attachments = (m.attachments_json ? (typeof m.attachments_json === 'string' ? JSON.parse(m.attachments_json) : m.attachments_json) : []) as any[]
+ const isRemediated = attachments.length > 0
  return (
  <tr key={i}>
- <td style={S.td}>{m.template?.required ? <span style={{ color: '#ff4d4f', marginRight: 4 }}>*</span> : ''}{m.template?.material_name || m.template_id}</td>
+ <td style={S.td}>{m.template?.required ? <span style={{ color: '#ff4d4f', marginRight: 4 }}>*</span> : ''}{m.template?.material_name || m.template_id}{isRemediated && <span style={{ fontSize: 10, color: '#fa8c16', marginLeft: 4, border: '1px solid #fa8c16', borderRadius: 3, padding: '0 4px' }}>已整改</span>}</td>
  <td style={S.td}>{m.file_name ? (
+ <div>
  <span style={{ fontSize: 11, color: '#1677ff' }}>
  <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => previewMaterial(m.template_id, m.file_name)}>{m.file_name}</span>
  <button style={{ fontSize: 10, padding: '1px 6px', border: '1px solid #52c41a', borderRadius: 3, background: '#fff', color: '#52c41a', cursor: 'pointer', marginLeft: 4 }} onClick={() => downloadMaterial(m.template_id)}>下载</button>
  </span>
+ {isRemediated && (
+ <div style={{ marginTop: 4, paddingLeft: 12, borderLeft: '2px solid #fa8c16' }}>
+ {attachments.map((att: any, ai: number) => (
+ <div key={ai} style={{ fontSize: 11, color: '#999', marginBottom: 2 }}>
+ <span style={{ color: '#fa8c16', marginRight: 4 }}>原版:</span>
+ <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => previewAttachment(att.file_data, att.file_name)}>{att.file_name}</span>
+ <button style={{ fontSize: 10, padding: '1px 6px', border: '1px solid #d9d9d9', borderRadius: 3, background: '#fff', color: '#666', cursor: 'pointer', marginLeft: 4 }} onClick={() => downloadAttachment(att.file_data)}>下载</button>
+ </div>
+ ))}
+ </div>
+ )}
+ </div>
  ) : <span style={{ color: '#999', fontSize: 11 }}>—</span>}</td>
  </tr>
  )
