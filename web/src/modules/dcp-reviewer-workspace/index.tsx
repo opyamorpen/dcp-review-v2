@@ -1144,17 +1144,13 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  {(canPublish ? allIssues : myIssues).length === 0 ? <div style={{ color: '#999', padding: 12, textAlign: 'center', fontSize: 13 }}>{canPublish ? '暂无整改项' : (allIssues.length > 0 ? '其他评审人已创建工作项，你尚未创建' : '暂无关联工作项')}</div> :
  <table style={S.table}>
  <thead><tr>
- <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>类型</th><th style={{ ...S.th, width: 80 }}>状态</th><th style={{ ...S.th, width: 80 }}>创建者</th>
+ <th style={S.th}>ID</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>工作项类型</th><th style={{ ...S.th, width: 80 }}>状态</th><th style={{ ...S.th, width: 80 }}>创建者</th>
  </tr></thead>
  <tbody>
  {(canPublish ? allIssues : myIssues).map((iss: any, i: number) => (
  <tr key={i}>
- <td style={S.td}><code style={{ fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 12)}</code></td>
- <td style={S.td}>
- <a href={taskUrl(iss)} target="_blank" style={{ color: '#1677ff', textDecoration: 'none' }} rel="noreferrer">
- {iss.issue_title || '-'}
- </a>
- </td>
+ <td style={S.td}><a href={taskUrl(iss)} target="_blank" style={{ color: '#1677ff', textDecoration: 'none', fontFamily: 'monospace', fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 12)}</a></td>
+ <td style={S.td}>{iss.issue_title || '-'}</td>
  <td style={S.td}>{iss.issue_type || '-'}</td>
  <td style={S.td}>{iss.issue_status || '-'}</td>
  <td style={S.td}>{iss.linked_by_name || (iss.linked_by ? iss.linked_by.substring(0, 8) : '-')}</td>

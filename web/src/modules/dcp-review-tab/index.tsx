@@ -1927,7 +1927,7 @@ const LinkedIssuesPanel: React.FC<{ data: any; projectUuid: string; projectKey: 
 // ============================================================
 const RISK_LABELS: Record<string, string> = { low: '低', medium: '中', high: '高' }
 
-function SnapshotSections({ res, defaultExpanded }: { res: any; defaultExpanded: boolean }) {
+function SnapshotSections({ res, defaultExpanded, projectUuid }: { res: any; defaultExpanded: boolean; projectUuid?: string }) {
   // 兼容旧格式（数组=纯投票）和新格式（对象={votes, indicators, checklist, issues}）
   const raw = res.based_on_votes ? (() => { try { return JSON.parse(res.based_on_votes) } catch { return null } })() : null
   let votes: any[] = []
@@ -2048,13 +2048,13 @@ function SnapshotSections({ res, defaultExpanded }: { res: any; defaultExpanded:
               <div style={{ fontWeight: 600, fontSize: 12, color: '#666', marginBottom: 4 }}>整改工作项</div>
               <table style={S.table}>
                 <thead><tr>
-                  <th style={S.th}>编号</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>状态</th>
+                  <th style={S.th}>ID</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>状态</th>
                   <th style={{ ...S.th, width: 80 }}>创建者</th><th style={{ ...S.th, width: 60, textAlign: 'center' }}>锁定</th>
                 </tr></thead>
                 <tbody>
                   {issues.map((iss: any, i: number) => (
                     <tr key={i}>
-                      <td style={S.td}><code style={{ fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 8)}</code></td>
+                      <td style={S.td}><a href={`/project/#/team/${getTeamUUID()}/project/${projectUuid || ''}/issue/${iss.issue_number || iss.issue_uuid}`} target="_blank" style={{ color: '#1677ff', textDecoration: 'none', fontFamily: 'monospace', fontSize: 11 }}>{iss.issue_number || iss.issue_uuid?.substring(0, 8)}</a></td>
                       <td style={S.td}>{iss.issue_title || '-'}</td>
                       <td style={S.td}>{iss.issue_status || '-'}</td>
                       <td style={S.td}>{iss.linked_by_name || '-'}</td>
@@ -2078,6 +2078,7 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
   const res = data.resolution
   const supps = data.supplements || []
   const allResolutions = data.resolutions || []
+  const projectUuid = data.review?.project_uuid || ''
   const _rNo = data.review?.round_no || 1
   const prevResolutions = allResolutions.filter((r: any) => (r.round_no || 1) < _rNo)
     .sort((a: any, b: any) => (b.round_no || 1) - (a.round_no || 1))
@@ -2122,7 +2123,7 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
               </div>
               {pr.condition_notes && <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: '#666', marginTop: 4 }}>{pr.condition_notes}</div>}
               {pr.published_by_name && <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>发布人: {pr.published_by_name}</div>}
-              <SnapshotSections res={pr} defaultExpanded={false} />
+              <SnapshotSections res={pr} defaultExpanded={false} projectUuid={projectUuid} />
             </div>
           ))}
         </div>
@@ -2150,7 +2151,7 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
         {res.published_by_name && <div style={{ marginTop: 8, fontSize: 12, color: '#666' }}>发布人: {res.published_by_name}</div>}
 
         {/* 快照详情：评审意见 + 指标 + Checklist + 整改项 */}
-        <SnapshotSections res={res} defaultExpanded={true} />
+        <SnapshotSections res={res} defaultExpanded={true} projectUuid={projectUuid} />
       </div>
       {/* 历史决议（多轮） */}
       {prevResolutions.length > 0 && (
@@ -2168,7 +2169,7 @@ const ResolutionPanel: React.FC<{ data: any; onRefresh: () => void }> = ({ data,
                 </div>
                 {pr.condition_notes && <div style={{ whiteSpace: 'pre-wrap', fontSize: 12, color: '#666', marginTop: 4 }}>{pr.condition_notes}</div>}
                 {pr.published_by_name && <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>发布人: {pr.published_by_name}</div>}
-                <SnapshotSections res={pr} defaultExpanded={false} />
+                <SnapshotSections res={pr} defaultExpanded={false} projectUuid={projectUuid} />
               </div>
             ))}
           </div>
