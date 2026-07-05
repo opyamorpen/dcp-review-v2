@@ -2559,13 +2559,21 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
     const publisher = updatedSnap.find((r: any) => r.role_name === _pubRole)
     if (publisher && publisher.reviewer_uuid) {
       const phaseName = (rv as any).phase_code || ''
-      await sendNotification(
+      const sendResult = await sendNotification(
         `${_rvType.toUpperCase()}决议通知 — ${phaseName}`,
         `「${phaseName}」评审已满足决议条件，请前往发布决议。`,
         `${(rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : ''}`,
         [publisher.reviewer_uuid],
       )
+      Logger.info(`[DCP] submitOpinion notify publisher: publisher=${publisher.reviewer_uuid}, attempted=${sendResult.attempted.length}, succeeded=${sendResult.succeeded.length}, failed=${sendResult.failed.length}`)
+      if (sendResult.failed.length > 0) {
+        Logger.error(`[DCP] submitOpinion notify failed: ${JSON.stringify(sendResult.failed)}`)
+      }
+    } else {
+      Logger.info(`[DCP] submitOpinion: ready but no publisher found, _pubRole=${_pubRole}`)
     }
+  } else {
+    Logger.info(`[DCP] submitOpinion: _ready=${_ready}, notify_enabled=${notCfg2.enabled}, on_all_submitted=${notCfg2.on_all_submitted}`)
   }
 
   return { body: { ok: true } }

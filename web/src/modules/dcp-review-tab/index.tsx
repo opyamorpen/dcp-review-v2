@@ -619,6 +619,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
   const sc = STATUS_COLORS[effState] || STATUS_COLORS[rv.status] || '#999'
   const sl = STATUS_LABELS[effState] || STATUS_LABELS[rv.status] || rv.status
   const isEditable = rv.status === 'draft' || effState === 'canceled'
+  const isRemediation = effState === 'remediation_pending'
   const isReviewing = rv.status === 'reviewing'
   const isDone = rv.status === 'completed' || rv.status === 'rejected'
 
@@ -1244,7 +1245,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
         ))}
       </div>
       {/* 内容区 */}
-      {activeTab === 'materials' && <div style={S.tabPanel}><MaterialsPanel data={data} editable={isEditable} onRefresh={onRefresh} currentUser={currentUser} /></div>}
+      {activeTab === 'materials' && <div style={S.tabPanel}><MaterialsPanel data={data} editable={isEditable} isRemediation={isRemediation} onRefresh={onRefresh} currentUser={currentUser} /></div>}
       {activeTab === 'reviewers' && <div style={S.tabPanel}><ReviewersPanel data={data} editable={isEditable} isReviewing={isReviewing} onRefresh={onRefresh} currentUser={currentUser} /></div>}
       {activeTab === 'checklist' && (
         <div style={S.tabPanel}>
@@ -1305,7 +1306,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
 // ============================================================
 // 评审资料面板（材料 + 指标）
 // ============================================================
-const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => void; currentUser: { uuid: string; name: string } }> = ({ data, editable, onRefresh, currentUser }) => {
+const MaterialsPanel: React.FC<{ data: any; editable: boolean; isRemediation?: boolean; onRefresh: () => void; currentUser: { uuid: string; name: string } }> = ({ data, editable, isRemediation, onRefresh, currentUser }) => {
   const mats = data.materials || []
   const inds = data.indicators || []
   const [editInd, setEditInd] = useState(false)
@@ -1486,6 +1487,37 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; onRefresh: () => 
                                 }}
                               >清除</button>
                             </span>
+                          )}
+                        </div>
+                      ) : isRemediation ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <label style={{ display: 'inline-block', padding: '4px 12px', borderRadius: 4, background: '#fa8c16', color: '#fff', cursor: 'pointer', fontSize: 11, whiteSpace: 'nowrap' as any }}>
+                            {hasFile ? '上传修改版' : '选择文件'}
+                            <input
+                              type="file"
+                              style={{ display: 'none' }}
+                              onChange={e => {
+                                const f = e.target.files?.[0]
+                                if (f) handleFileSelect(m.template_id, f)
+                              }}
+                            />
+                          </label>
+                          {hasFile && (
+                            <span style={{ fontSize: 11, color: '#52c41a' }}>
+                              <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => previewMaterial(m.template_id, m.file_name)}>{m.file_name}</span>
+                              <button style={{ fontSize: 10, padding: '1px 6px', border: '1px solid #52c41a', borderRadius: 3, background: '#fff', color: '#52c41a', cursor: 'pointer', marginLeft: 4 }} onClick={() => downloadMaterial(m.template_id)}>下载</button>
+                            </span>
+                          )}
+                          {isRemediated && (
+                            <div style={{ marginTop: 4, paddingLeft: 12, borderLeft: '2px solid #fa8c16' }}>
+                              {attachments.map((att: any, ai: number) => (
+                                <div key={ai} style={{ fontSize: 11, color: '#999', marginBottom: 2 }}>
+                                  <span style={{ color: '#fa8c16', marginRight: 4 }}>原版:</span>
+                                  <span style={{ cursor: 'pointer', textDecoration: 'underline' }} onClick={() => previewAttachment(att.file_data, att.file_name)}>{att.file_name}</span>
+                                  <button style={{ fontSize: 10, padding: '1px 6px', border: '1px solid #d9d9d9', borderRadius: 3, background: '#fff', color: '#666', cursor: 'pointer', marginLeft: 4 }} onClick={() => downloadAttachment(att.file_data)}>下载</button>
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </div>
                       ) : hasFile ? (
