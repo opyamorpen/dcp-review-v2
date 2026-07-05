@@ -67,7 +67,6 @@ export const RemediationPanel: React.FC<{
             ? <span style={{ padding: '1px 6px', borderRadius: 3, background: '#fff7e6', color: '#fa8c16', fontSize: 11, border: '1px solid #faad14' }}>整改项</span>
             : <span style={{ padding: '1px 6px', borderRadius: 3, background: '#e6f4ff', color: '#1677ff', fontSize: 11, border: '1px solid #91caff' }}>评审问题</span>}
         </td>
-        <td style={S.td}>{iss.locked === 'locked' ? '🔒' : '—'}</td>
       </tr>
     )
   })
@@ -102,7 +101,7 @@ export const RemediationPanel: React.FC<{
           <div style={S.tableWrap}>
             <table style={S.table}>
               <thead><tr>
-                <th style={S.th}>ID</th><th style={S.th}>标题</th><th style={S.th}>工作项类型</th><th style={S.th}>状态</th><th style={S.th}>分类</th><th style={S.th}>锁定</th>
+                <th style={S.th}>ID</th><th style={S.th}>标题</th><th style={S.th}>工作项类型</th><th style={S.th}>状态</th><th style={S.th}>分类</th>
               </tr></thead>
               <tbody>{issueRows}</tbody>
             </table>

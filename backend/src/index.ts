@@ -2994,7 +2994,6 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     issue_title: iss.issue_title || '',
     issue_status: normalizeIssueStatus(iss.issue_status),
     linked_by_name: iss.linked_by_name || '',
-    locked: iss.locked || '',
   }))
 
   await resolution.set(resKey, {
@@ -4027,17 +4026,7 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
     }
   }
 
-  // 2. 锁定工作项（更新 linkedIssue.locked）
-  for (const item of syncedItems) {
-    await linkedIssue.set(item._key, {
-      ...item,
-      locked: 'locked',
-      locked_at: now,
-      locked_by: publisher_uuid,
-    })
-  }
-
-  // 3. 评审单状态流转（整改完成后只能发起复审）
+  // 2. 评审单状态流转（整改完成后只能发起复审）
   const targetState = 're_reviewing'
   const reason = '整改完成，发起复审'
 

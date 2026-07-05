@@ -2049,7 +2049,7 @@ function SnapshotSections({ res, defaultExpanded, projectUuid }: { res: any; def
               <table style={S.table}>
                 <thead><tr>
                   <th style={{ ...S.th, width: 60 }}>ID</th><th style={S.th}>标题</th><th style={{ ...S.th, width: 80 }}>状态</th>
-                  <th style={{ ...S.th, width: 80 }}>创建者</th><th style={{ ...S.th, width: 60, textAlign: 'center' }}>锁定</th>
+                  <th style={{ ...S.th, width: 80 }}>创建者</th>
                 </tr></thead>
                 <tbody>
                   {issues.map((iss: any, i: number) => (
@@ -2058,7 +2058,6 @@ function SnapshotSections({ res, defaultExpanded, projectUuid }: { res: any; def
                       <td style={S.td}>{iss.issue_title || '-'}</td>
                       <td style={S.td}>{iss.issue_status || '-'}</td>
                       <td style={S.td}>{iss.linked_by_name || '-'}</td>
-                      <td style={{ ...S.td, textAlign: 'center' }}>{iss.locked === 'locked' ? '🔒' : '-'}</td>
                     </tr>
                   ))}
                 </tbody>
