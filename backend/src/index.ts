@@ -2856,9 +2856,11 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   ])
   const allIndTpls = await qAll(indTpl)
   const snapshotIndicators = snapIndicators.map((ind: any) => {
-    const tpl = allIndTpls.find((t: any) => t._key === ind.template_id) as any
+    // 优先读评审单指标实体的固化字段，旧数据无固化时回退实时模板
+    const frozenName = ind.indicator_name || ''
+    const tpl = !frozenName ? allIndTpls.find((t: any) => t._key === ind.template_id) as any : null
     return {
-      indicator_name: tpl?.indicator_name || '',
+      indicator_name: frozenName || tpl?.indicator_name || '',
       current_value: ind.current_value || 0,
       risk_color: ind.risk_color || 'green',
       notes: ind.notes || '',
