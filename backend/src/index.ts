@@ -213,6 +213,15 @@ function getParam(req: any, name: string): string {
   return ''
 }
 
+// 获取当前请求的真实用户 UUID（方案A：不信任前端 body 传递的身份）
+// ONES 网关在用户通过页面访问插件接口时自动注入 Ones-User-Id 请求头
+function getOperator(req: any): string {
+  if (!req?.headers) return ''
+  const h = req.headers
+  // ONES 注入的请求头大小写不确定，全量兼容
+  return h['ones-user-id'] || h['Ones-User-Id'] || h['ONES-USER-ID'] || ''
+}
+
 // ============================================================
 // 生命周期
 // ============================================================
@@ -948,8 +957,12 @@ export async function getPluginConfig(_req: any): Promise<PluginResponse> {
 
 export async function savePluginConfig(req: any): Promise<PluginResponse> {
   try {
+    // 方案B：仅管理员可保存全局配置
+    const operator_uuid = getOperator(req)
+    if (!operator_uuid) {
+      return { body: { error: '无法获取当前用户身份' }, statusCode: 401 }
+    }
     const b = (req.body || {}) as any
-    const operator_uuid = b.operator_uuid || ''
     if (b.config) {
       for (const [k, v] of Object.entries(b.config)) {
         await baseCfg.set(k as string, { key: k, value: v as string })
@@ -1014,7 +1027,10 @@ export async function savePluginConfig(req: any): Promise<PluginResponse> {
 // ============================================================
 export async function createReview(req: any): Promise<PluginResponse> {
   const b = (req.body || {}) as any
-  const { project_uuid, phase_code, review_title, meeting_time, creator_uuid, review_type } = b
+  // 方案A：creator_uuid 使用真实身份，不信任前端传递
+  const operatorUuid = getOperator(req)
+  const { project_uuid, phase_code, review_title, meeting_time, review_type } = b
+  const creator_uuid = operatorUuid || b.creator_uuid || ''
   if (!project_uuid || !phase_code) {
     return { body: { error: '缺少 project_uuid / phase_code' }, statusCode: 400 }
   }
@@ -1113,8 +1129,8 @@ export async function createReview(req: any): Promise<PluginResponse> {
 // ============================================================
 export async function deleteReview(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
-  const b = (req.body || {}) as any
-  const { operator_uuid } = b
+  // 方案A+B：用真实身份校验，不信任前端 operator_uuid
+  const operator_uuid = getOperator(req)
   if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
@@ -1147,13 +1163,17 @@ export async function deleteReview(req: any): Promise<PluginResponse> {
 export async function recreateReview(req: any): Promise<PluginResponse> {
   const srcRid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
-  const operator_uuid = b.operator_uuid || ''
+  // 方案A+B：用真实身份，校验仅创建者可重新发起
+  const operator_uuid = getOperator(req)
   if (!srcRid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
 
   const srcRv = await review.get(srcRid) as any
   if (!srcRv) return { body: { error: '源评审单不存在' }, statusCode: 404 }
   if (srcRv.status !== 'rejected') {
     return { body: { error: '仅已驳回的评审单可重新发起' }, statusCode: 400 }
+  }
+  if (operator_uuid && srcRv.creator_uuid && operator_uuid !== srcRv.creator_uuid) {
+    return { body: { error: '仅创建者可重新发起评审' }, statusCode: 403 }
   }
 
   // 创建新评审单
@@ -1672,6 +1692,11 @@ export async function startReview(req: any): Promise<PluginResponse> {
   if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
+  // 方案B：仅创建者可发起评审
+  const _startOp = getOperator(req)
+  if (_startOp && (rv as any).creator_uuid && _startOp !== (rv as any).creator_uuid) {
+    return { body: { error: '仅创建者可发起评审' }, statusCode: 403 }
+  }
   if (rv.status !== 'draft') return { body: { error: '当前状态不可发起评审' }, statusCode: 400 }
 
   // 校验 0：前置依赖检查——前置阶段的决议必须为"通过"或"有条件通过"
@@ -1787,7 +1812,7 @@ export async function startReview(req: any): Promise<PluginResponse> {
     }))
     checklistJson = JSON.stringify(initList)
   }
-  const opUuid = (req.body || {} as any).operator_uuid || ''
+  const opUuid = getOperator(req)
   const stateFields = buildStateTransition(rv, 'reviewing', opUuid, '发起评审', { checklist_json: checklistJson })
   await review.set(rid, cleanForSet({ ...rv, ...stateFields }))
   await writeAudit(rid, opUuid, '启动评审', rid,
@@ -1829,7 +1854,9 @@ export async function recallReview(req: any): Promise<PluginResponse> {
  try {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
-  const { operator_uuid, reason } = b
+  // 方案A：用真实身份
+  const operator_uuid = getOperator(req)
+  const { reason } = b
 
   if (!rid || !operator_uuid) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
@@ -1928,7 +1955,9 @@ export async function recallReview(req: any): Promise<PluginResponse> {
 export async function updateReviewBasicInfo(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
-  const { operator_uuid, meeting_time, review_title } = b
+  // 方案A：用真实身份
+  const operator_uuid = getOperator(req)
+  const { meeting_time, review_title } = b
 
   if (!rid || !operator_uuid) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
@@ -1977,6 +2006,8 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
   const { template_id, file_name, object_key } = b
+  // 方案A：用真实身份记录上传者
+  const _uploadOp = getOperator(req)
   if (!rid || !template_id || !file_name) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
   }
@@ -2016,7 +2047,7 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
     review_uuid: rid, template_id,
     submit_status: (ex.submit_status === 'approved' || ex.submit_status === 'rejected') ? ex.submit_status : 'submitted',
     notes: ex.notes ?? '',
-    updated_by: b.updated_by || '', updated_at: now,
+    updated_by: _uploadOp || b.updated_by || '', updated_at: now,
     file_name, file_data: object_key || ex.file_data || '', file_size: b.file_size || 0,
     uploaded_at: now,
     round_no: currentRoundNo,
@@ -2027,7 +2058,7 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
     attachments_json: JSON.stringify(attachments),
   })
   const auditAction = effState === 'remediation_pending' && ex.file_data ? '整改材料追加' : '上传材料'
-  await writeAudit(rid, b.operator_uuid || b.updated_by || '', auditAction, template_id,
+  await writeAudit(rid, _uploadOp || b.operator_uuid || b.updated_by || '', auditAction, template_id,
     `${auditAction}: ${file_name}`)
   return { body: { ok: true, file_name } }
 }
@@ -2038,6 +2069,8 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
 export async function removeMaterialFile(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
+  // 方案A：用真实身份
+  const _removeOp = getOperator(req)
   const { template_id } = b
   if (!rid || !template_id) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
@@ -2059,7 +2092,7 @@ export async function removeMaterialFile(req: any): Promise<PluginResponse> {
     review_uuid: rid, template_id,
     submit_status: 'draft',
     notes: ex.notes ?? '',
-    updated_by: b.updated_by || '', updated_at: Date.now(),
+    updated_by: _removeOp || b.updated_by || '', updated_at: Date.now(),
     file_name: '', file_data: '', file_size: 0,
     uploaded_at: 0,
     // 保留固化字段
@@ -2068,7 +2101,7 @@ export async function removeMaterialFile(req: any): Promise<PluginResponse> {
     // 草稿阶段清空也清除历史附件
     attachments_json: '[]',
   })
-  await writeAudit(rid, b.operator_uuid || b.updated_by || '', '删除材料', template_id,
+  await writeAudit(rid, _removeOp || b.operator_uuid || b.updated_by || '', '删除材料', template_id,
     `清除材料文件`)
   return { body: { ok: true } }
 }
@@ -2235,6 +2268,8 @@ export async function getAttachmentPreview(req: any): Promise<PluginResponse> {
 export async function updateMaterialStatus(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
+  // 方案A：用真实身份
+  const _matOp = getOperator(req)
   const { template_id, submit_status, notes } = b
   if (!rid || !template_id || !submit_status) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
@@ -2250,7 +2285,7 @@ export async function updateMaterialStatus(req: any): Promise<PluginResponse> {
   await matItem.set(key, {
     review_uuid: rid, template_id, submit_status,
     notes: notes ?? (ex as any).notes ?? '',
-    updated_by: b.updated_by || '', updated_at: Date.now(),
+    updated_by: _matOp || b.updated_by || '', updated_at: Date.now(),
     file_name: (ex as any).file_name ?? '',
     file_data: (ex as any).file_data ?? '',
     file_size: (ex as any).file_size ?? 0, uploaded_at: (ex as any).uploaded_at ?? 0,
@@ -2267,7 +2302,9 @@ export async function updateMaterialStatus(req: any): Promise<PluginResponse> {
 export async function updateIndicators(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
-  const { indicators, operator_uuid } = b
+  // 方案A：用真实身份
+  const operator_uuid = getOperator(req)
+  const { indicators } = b
   if (!rid || !Array.isArray(indicators)) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
   }
@@ -2303,6 +2340,8 @@ export async function updateIndicators(req: any): Promise<PluginResponse> {
 export async function updateReviewers(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
+  // 方案A+B：用真实身份，仅创建者可修改评审人
+  const _rvOp = getOperator(req)
   const reviewers = Array.isArray(b.reviewers) ? b.reviewers : null
   if (!rid || !reviewers) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
@@ -2310,6 +2349,9 @@ export async function updateReviewers(req: any): Promise<PluginResponse> {
 
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
+  if (_rvOp && (rv as any).creator_uuid && _rvOp !== (rv as any).creator_uuid) {
+    return { body: { error: '仅创建者可修改评审人' }, statusCode: 403 }
+  }
   if (rv.status !== 'draft') {
     return { body: { error: '评审已发起，不可修改评审人' }, statusCode: 403 }
   }
@@ -2400,7 +2442,7 @@ export async function updateReviewers(req: any): Promise<PluginResponse> {
     await review.set(rid, cleanForSet({ ...rv, reviewers_json: JSON.stringify(savedPayload), updated_at: Date.now() }))
   } catch {}
 
-  await writeAudit(rid, (req.body || {} as any).operator_uuid || '', '更新评审人', rid,
+  await writeAudit(rid, _rvOp || (req.body || {} as any).operator_uuid || '', '更新评审人', rid,
     `评审人已更新，共 ${savedPayload.length} 人`)
   return { body: { ok: true, saved_count: savedPayload.length, reviewers: savedPayload } }
 }
@@ -2459,6 +2501,11 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
   const { reviewer_uuid, role_name, conclusion, risk_level, opinion_summary } = b
+  // 方案A+B：用真实身份，reviewer_uuid 必须与当前登录用户一致
+  const _submitOp = getOperator(req)
+  if (_submitOp && reviewer_uuid && _submitOp !== reviewer_uuid) {
+    return { body: { error: '只能提交本人的评审意见' }, statusCode: 403 }
+  }
   if (!rid || !reviewer_uuid || !role_name || !conclusion) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
   }
@@ -2593,7 +2640,10 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
 export async function linkIssue(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
-  const { issue_uuid, issue_number, issue_title, issue_type, issue_status, linked_by } = b
+  // 方案A：用真实身份
+  const _linkOp = getOperator(req)
+  const { issue_uuid, issue_number, issue_title, issue_type, issue_status } = b
+  const linked_by = _linkOp || b.linked_by || ''
   const linkType = b.link_type || 'general'
   if (!rid || !issue_uuid) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
@@ -2655,6 +2705,8 @@ export async function createIssue(req: any): Promise<PluginResponse> {
   const rv = rvs[0]
 
   const b = (req.body || {}) as any
+  // 方案A：用真实身份
+  const _createIssueOp = getOperator(req)
   const {
     title,
     issue_type_scope_uuid,  // 项目内 IssueTypeScope.uuid
@@ -2668,7 +2720,7 @@ export async function createIssue(req: any): Promise<PluginResponse> {
 
   // 已提交评审意见的非决议人不可再创建整改工作项
   {
-    const linkedBy = (b as any).linked_by || assignee_uuid || rv.creator_uuid || ''
+    const linkedBy = _createIssueOp || (b as any).linked_by || assignee_uuid || rv.creator_uuid || ''
     if (linkedBy) {
       const isPublisher = await isPublisherRole(rv, linkedBy)
       if (!isPublisher) {
@@ -2783,12 +2835,12 @@ export async function createIssue(req: any): Promise<PluginResponse> {
       issue_title: title,
       issue_type: issue_type_uuid || typeScopeUuid || '',
       issue_status: '',
-      linked_by: b.linked_by || assignee_uuid || rv.creator_uuid || '',
+      linked_by: _createIssueOp || b.linked_by || assignee_uuid || rv.creator_uuid || '',
       linked_by_name: b.linked_by_name || '',
       linked_at: Date.now(),
     })
 
-    await writeAudit(rid, assignee_uuid || rv.creator_uuid || '', '创建工作项', issueUuid,
+    await writeAudit(rid, _createIssueOp || assignee_uuid || rv.creator_uuid || '', '创建工作项', issueUuid,
       `创建工作项并关联: ${issueNumber || issueUuid} - ${title}`)
 
     return { body: { ok: true, issue_uuid: issueUuid, issue_number: issueNumber } }
@@ -2806,16 +2858,22 @@ export async function createIssue(req: any): Promise<PluginResponse> {
 export async function publishResolution(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
+  // 方案A+B：用真实身份，publisher_uuid 必须与当前登录用户一致
+  const _pubOp = getOperator(req)
   const {
     final_conclusion,    // pass | conditional_pass | reject | fail | rework
     condition_notes,
-    publisher_uuid,
     publisher_name,
   } = b
   // 兼容旧字段
   const fc = final_conclusion || b.resolution_result
   const cn = condition_notes || b.resolution_body || ''
-  const puuid = publisher_uuid || b.operator_uuid || ''
+  const puuid = _pubOp || b.publisher_uuid || b.operator_uuid || ''
+
+  // 校验：publisher_uuid 必须与真实身份一致（防止冒充）
+  if (_pubOp && b.publisher_uuid && _pubOp !== b.publisher_uuid) {
+    return { body: { error: '只能以本人身份发布决议' }, statusCode: 403 }
+  }
 
   if (!rid || !fc) {
     return { body: { error: '缺少 final_conclusion' }, statusCode: 400 }
@@ -3079,7 +3137,10 @@ export async function generateResolution(req: any): Promise<PluginResponse> {
 export async function addSupplement(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
-  const { note_type, note_title, note_content, submitted_by } = b
+  // 方案A：用真实身份
+  const _suppOp = getOperator(req)
+  const { note_type, note_title, note_content } = b
+  const submitted_by = _suppOp || b.submitted_by || ''
   if (!rid || !note_type || !note_title || !note_content) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
   }
@@ -3102,7 +3163,12 @@ export async function addSupplement(req: any): Promise<PluginResponse> {
 export async function checkChecklist(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
+  // 方案A+B：用真实身份，reviewer_uuid 必须与当前登录用户一致
+  const _chkOp = getOperator(req)
   const { template_id, status, reviewer_uuid } = b
+  if (_chkOp && reviewer_uuid && _chkOp !== reviewer_uuid) {
+    return { body: { error: '只能操作本人的检查项' }, statusCode: 403 }
+  }
   if (!rid || !template_id || !status) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
   }
@@ -3171,7 +3237,9 @@ export async function getAuditLog(req: any): Promise<PluginResponse> {
 export async function remindReview(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
-  const { target, operator_uuid, operator_name } = b
+  // 方案A：用真实身份
+  const operator_uuid = getOperator(req)
+  const { target, operator_name } = b
 
   if (!rid || !target || !operator_uuid) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
@@ -3436,7 +3504,9 @@ export async function listIssueTypes(req: any): Promise<PluginResponse> {
 export async function transitionReview(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
-  const { target_state, operator_uuid, reason } = b
+  // 方案A：用真实身份
+  const operator_uuid = getOperator(req)
+  const { target_state, reason } = b
   if (!rid || !target_state || !operator_uuid) {
     return { body: { error: '缺少必要字段' }, statusCode: 400 }
   }
@@ -3940,7 +4010,14 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
   if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
   const tuid = getParam(req, 'team_uuid')
   const b = (req.body || {}) as any
-  const { publisher_uuid, next_action } = b
+  // 方案A+B：用真实身份，publisher_uuid 必须与当前登录用户一致
+  const _confirmOp = getOperator(req)
+  const publisher_uuid = _confirmOp || b.publisher_uuid || ''
+  const { next_action } = b
+  // 校验：publisher_uuid 必须与真实身份一致
+  if (_confirmOp && b.publisher_uuid && _confirmOp !== b.publisher_uuid) {
+    return { body: { error: '只能以本人身份确认整改' }, statusCode: 403 }
+  }
   // next_action: 're_review'（整改完成后只能发起复审，不能直接通过）
   if (!publisher_uuid) return { body: { error: '缺少 publisher_uuid' }, statusCode: 400 }
   if (!next_action || next_action !== 're_review') {
