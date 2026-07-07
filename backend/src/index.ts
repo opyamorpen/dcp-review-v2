@@ -3702,7 +3702,13 @@ export async function getReviewRounds(req: any): Promise<PluginResponse> {
   if (currentRound) rounds.push(currentRound)
 
   // 获取每轮的决议快照
+  // 旧数据兼容：v1.22.0 前的决议无 round_no 字段，从 _key 推断（key 格式: rid=第1轮, rid_rN=第N轮）
   const resolutions = await qAll(resolution, (v: any) => v.review_uuid === rid)
+  const resRoundNo = (res: any): number => {
+    if (res.round_no) return Number(res.round_no)
+    const m = (res._key || '').match(/_r(\d+)$/)
+    return m ? Number(m[1]) : 1
+  }
 
   return {
     body: {
@@ -3717,7 +3723,7 @@ export async function getReviewRounds(req: any): Promise<PluginResponse> {
         start_state: r.start_state,
         end_state: r.end_state || r.start_state,
         state_count: r.states.length,
-        resolution: resolutions.find((res: any) => Number(res.round_no || 1) === r.round_no) || null,
+        resolution: resolutions.find((res: any) => resRoundNo(res) === r.round_no) || null,
       })),
     }
   }
