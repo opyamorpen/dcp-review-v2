@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>DCP Review Center User Manual</title>
+<style>
+@page { size: A4; margin: 2cm 2.2cm; @bottom-center { content: counter(page); font-size: 9pt; color: #999; } }
+body { font-family: 'WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'SimHei', sans-serif; font-size: 11pt; line-height: 1.7; color: #333; }
+h1 { color: #1677ff; font-size: 24pt; text-align: center; margin-top: 3cm; }
+h2 { color: #1677ff; font-size: 16pt; border-bottom: 2px solid #1677ff; padding-bottom: 4px; margin-top: 28px; page-break-after: avoid; }
+h3 { color: #444; font-size: 13pt; margin-top: 20px; page-break-after: avoid; }
+p { margin: 6px 0; }
+ul { margin: 4px 0 8px 0; padding-left: 20px; }
+li { margin: 3px 0; }
+.note { background: #e6f4ff; border-left: 3px solid #1677ff; padding: 8px 12px; margin: 10px 0; font-size: 10pt; }
+.title-page p { text-align: center; color: #666; font-size: 13pt; margin: 4px 0; }
+.toc { margin: 20px 0; }
+.toc a { color: #333; text-decoration: none; }
+.break { page-break-before: always; }
+table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 10pt; }
+th { background: #1677ff; color: #fff; padding: 6px 10px; text-align: left; }
+td { padding: 5px 10px; border-bottom: 1px solid #eee; }
+tr:nth-child(even) td { background: #fafafa; }
+.footer-text { text-align: center; color: #999; font-size: 10pt; margin-top: 30px; }
+</style></head><body>
+<div class="title-page">
+<h1>DCP Review Center</h1>
+<p style="font-size:18pt;margin-top:10px;">User Manual / 用户使用手册</p>
+<p style="margin-top:40px;">Version 1.29.0</p>
+<p>Team-level DCP/TR Review Management</p>
+<p>App ID: 709xehle &bull; Mode: Organization</p>
+<p style="font-size:10pt;margin-top:60px;color:#999;">ONES Open Platform Plugin</p>
+</div>
+
+<div class="break"></div><h2>Table of Contents / 目录</h2>
+<ul><li>1. Overview & Key Concepts / 概述与核心概念</li><li>2. Getting Started / 快速入门</li><li>3. System Modules / 系统模块</li><li>4. Managing Review Templates / 管理评审模板</li><li>5. Review Lifecycle / 评审生命周期</li><li>6. State Machine & Transitions / 状态机与流转</li><li>7. Permissions / 权限管理</li><li>8. Notifications & Reminders / 通知与催办</li><li>9. Linked Issues & Remediation / 关联工作项与整改</li><li>10. Audit Trail / 审计追溯</li><li>11. FAQ & Troubleshooting / 常见问题</li><li>12. Appendix: API Reference / 附录：API 参考</li></ul>
+<div class="break"></div><h2>1. Overview & Key Concepts / 概述与核心概念</h2>
+<p>DCP Review Center is a team-level ONES plugin for managing IPD (Integrated Product Development) decision checkpoint reviews. It supports both DCP (Decision Check Point) reviews for business decisions and TR (Technical Review) reviews for engineering validation.</p>
+<p>DCP 评审中心是一个团队级别的 ONES 插件，用于管理 IPD（集成产品开发）流程中的决策评审和技术评审。插件同时支持 DCP（决策评审）和 TR（技术评审）两种评审类型。</p>
+<h3>What is DCP? / 什么是 DCP？</h3>
+<p>DCP (Decision Check Point) is a structured decision-making checkpoint in the IPD process. At each phase boundary (Concept, Plan, Develop, Confirm, Release), a formal review evaluates whether the project is ready to proceed to the next phase.</p>
+<h3>What is TR? / 什么是 TR？</h3>
+<p>TR (Technical Review) evaluates the technical maturity of deliverables at each development stage. It ensures technical requirements, design specifications, and quality standards are met.</p>
+<h3>Key Concepts / 核心概念</h3>
+<ul><li>Review / 评审单: A single DCP or TR review instance tied to a project and phase.</li><li>Phase / 阶段: Predefined IPD stages (DCP1-DCP5, TR1-TR6).</li><li>Materials / 评审材料: Required documents that must be submitted before review.</li><li>Indicators / 评审指标: Quantitative metrics with threshold-based risk coloring (green/yellow/red).</li><li>Reviewers / 评审人: Assigned personnel with roles and voting powers (veto, must-vote).</li><li>Resolution / 决议: Final decision published by authorized role (e.g., Chair).</li><li>Checklist / 检查清单: Role-specific verification items for review completeness.</li><li>Remediation / 整改闭环: Post-resolution corrective actions tracked as ONES work items.</li><li>Snapshot & Freeze / 配置快照: Templates frozen at review creation for auditability.</li></ul>
+<div class="break"></div><h2>2. Getting Started / 快速入门</h2>
+<h3>Prerequisites / 前置条件</h3>
+<ul><li>ONES system version >= 3.11.39</li><li>Plugin installed at organization level (app_id: 709xehle)</li><li>Node.js >= 16.13.0 (for plugin development only)</li></ul>
+<h3>Installation / 安装</h3>
+<p>The plugin is distributed as a .opk file. Administrators install it through the ONES Plugin Management interface. After installation, three modules appear:</p>
+<ul><li>DCP Review Tab: Embedded in project detail pages as custom tab.</li><li>DCP Reviewer Workspace: Standalone workspace for reviewer task management.</li><li>DCP Review Center: Sidebar app for template configuration and team overview.</li></ul>
+<div class="break"></div><h2>3. System Modules / 系统模块</h2>
+<h3>3.1 DCP Review Tab / 项目内评审工作台</h3>
+<p>Appears inside each project page. Primary workspace for project teams.</p>
+<ul><li>List View: Browse reviews with filtering by number, title, phase, status, and type.</li><li>Create Review: Launch new DCP/TR reviews with phase selection and dependency checking.</li><li>Detail View: Tab navigation for Materials, Indicators, Reviewers, Remediation, Checklist, Resolution, Timeline, Audit, and Round Compare.</li><li>Status Dashboard: Color-coded status for draft, reviewing, awaiting resolution, published, completed.</li><li>Copy Link: One-click copy of review number for sharing.</li></ul>
+<h3>3.2 DCP Reviewer Workspace / 评审人工作台</h3>
+<p>Personal task center showing reviews assigned to the current user across all projects.</p>
+<ul><li>Pending My Review: Reviews requiring the current user to submit opinions.</li><li>Pending My Resolution: Reviews where current user is the authorized resolution publisher.</li><li>Done: Completed reviews the user participated in.</li></ul>
+<p>In detail view, reviewers can submit opinions, manage materials/indicators, link issues, and publish resolutions if authorized.</p>
+<h3>3.3 DCP Review Center Sidebar / 评审中心管理</h3>
+<ul><li>Template Configuration: Manage phases, materials, indicators, roles, checklists, resolution rules, IPD flow, notifications, recall, and remediation settings. (Requires dcp_admin)</li><li>Review Overview: Team-wide dashboard with filtering and status tracking. (Requires dcp_view_review)</li></ul>
+<div class="break"></div><h2>4. Managing Review Templates / 管理评审模板</h2>
+<p>All templates configured through DCP Review Center sidebar. Templates are organized by review type (DCP/TR) and frozen at review creation for audit consistency.</p>
+<h3>4.1 Phase Templates / 节点模板</h3>
+<p>Phases define IPD checkpoints. Each phase has:</p>
+<ul><li>Phase Code: Unique ID (e.g., DCP1, TR3).</li><li>Phase Name: Human-readable label.</li><li>Resolution Options: Available resolutions for this phase.</li><li>Resolution Template: Default resolution text.</li><li>Sort Order: Display ordering.</li><li>Dependencies: Prerequisite phases that must be completed first.</li><li>Review Type: DCP or TR association.</li></ul>
+<p>Default phases: DCP1-DCP5 (concept→release) and TR1-TR6 (parallel technical reviews).</p>
+<h3>4.2 Material Templates / 材料模板</h3>
+<p>Materials are documents/files required for review submission:</p>
+<ul><li>Material Name: Document name.</li><li>Applicable Phases: Which phases require this material.</li><li>Required Flag: Whether mandatory.</li><li>Responsible Role: Role accountable for submission.</li><li>Sort Order: Display ordering.</li></ul>
+<h3>4.3 Indicator Templates / 指标模板</h3>
+<p>Quantitative metrics with threshold-based risk assessment:</p>
+<ul><li>Indicator Name + Unit.</li><li>Threshold Type: "Above threshold alerts" or "Below threshold alerts".</li><li>Yellow Threshold: Warning level.</li><li>Red Threshold: Critical level.</li><li>Applicable Phases.</li></ul>
+<p>Auto color-coded: green (ok), yellow (warning), red (critical). Frozen at creation.</p>
+<h3>4.4 Reviewer Roles / 评审角色</h3>
+<ul><li>Role Name: e.g., Chair, R&D VP, Marketing VP, Finance Rep, QA Rep, Supply Chain Rep.</li><li>Must Vote: Whether required to vote before resolution.</li><li>Has Veto: Whether this role can veto a "pass" resolution.</li></ul>
+<p>Default roles initialized on first activation: Chair (veto), R&D VP, Marketing VP, Finance Rep (veto), QA Rep (veto), Supply Chain Rep.</p>
+<h3>4.5 Checklist Templates / 检查清单</h3>
+<p>Role-specific verification items organized by phase and role. Each item is checked/unchecked during review and snapshotted in resolution records.</p>
+<h3>4.6 Resolution Rules / 决议规则</h3>
+<p>Configured separately for DCP and TR. Validated for reachability before saving.</p>
+<ul><li>Publisher: Role authorized to publish final resolution.</li><li>Submit Requirement: Who must submit before resolution (must-vote roles / all reviewers / vote-scope roles / publisher only).</li><li>Pass Rule: Min approval count OR all required approved OR all required submitted.</li><li>Reject on Veto: Veto role rejection blocks "pass".</li><li>Vote Scope: Which roles count (must-vote / selected / all reviewers).</li><li>Allowed Conclusions: pass, conditional_pass, fail, rework, reject.</li></ul>
+<p>DCP default: pass/conditional_pass/reject, min 3 approvals (excluding Chair), veto blocks pass. TR default: pass/conditional_pass/fail/rework, all must-vote submitted.</p>
+<h3>4.7 IPD Flow Diagram / IPD 流程图</h3>
+<p>Visual pipeline: Concept → Plan → Develop → Confirm → Release. Diamond = DCP (top), Triangle = TR (bottom). Fully configurable layout and markers.</p>
+<h3>4.8 Notification Settings / 通知设置</h3>
+<ul><li>Master enable/disable toggle.</li><li>On Review Start: Notify reviewers.</li><li>On All Submitted: Notify resolution publisher.</li><li>On Resolution: Notify all reviewers.</li><li>Channels: Email, WeChat, DingTalk, Feishu, YouDao (individual toggles).</li></ul>
+<h3>4.9 Recall Settings / 撤回设置</h3>
+<ul><li>Enabled toggle.</li><li>Allowed Before Resolution: Only recall before resolution published.</li><li>Require Reason: Force reason input.</li><li>Clear Opinions: Whether to clear existing opinions on recall.</li></ul>
+<h3>4.10 Remediation Settings / 整改设置</h3>
+<p>Configure the ONES issue type for remediation work items (default: Task).</p>
+<div class="break"></div><h2>5. Review Lifecycle / 评审生命周期</h2>
+<h3>5.1 Creating a Review / 创建评审单</h3>
+<ul><li>Navigate to project > DCP Review tab > New Review.</li><li>Select review type (DCP/TR) and phase. Dependencies are checked.</li><li>Enter title and optional meeting time.</li><li>System auto-generates unique review number (e.g., PROJ2026070701 or TR-PROJ2026070701).</li><li>Templates are snapshotted (resolution rules, roles, checklist).</li><li>Materials and indicators auto-populated from matching templates.</li><li>Initial state: Draft.</li></ul>
+<h3>5.2 Configuring Materials / 配置评审材料</h3>
+<ul><li>Status: Pending / Submitted / Approved / Needs Revision (color-coded).</li><li>Upload single file OR multiple attachments per material template.</li><li>Free-text notes per material.</li><li>Inline preview and download for files/attachments.</li><li>Required materials must be submitted for review completion.</li></ul>
+<h3>5.3 Setting Indicators / 填写评审指标</h3>
+<ul><li>Enter current value for each metric.</li><li>Auto-calculated risk color (green/yellow/red) based on frozen thresholds.</li><li>Add contextual notes.</li></ul>
+<h3>5.4 Managing Reviewers / 管理评审人</h3>
+<ul><li>Select role from configured list.</li><li>Search team members by name/email.</li><li>Assign member to role, remove or reassign before review starts.</li><li>Reviewer list is snapshotted for audit.</li></ul>
+<h3>5.5 Submitting Opinions / 提交评审意见</h3>
+<ul><li>Conclusion: Pass / Conditional Pass / Fail / Rework.</li><li>Risk level: Low / Medium / High.</li><li>Opinion summary with detailed feedback.</li><li>Opinions are editable until resolution is published.</li><li>Each submission tagged with round_no for multi-round support.</li></ul>
+<h3>5.6 Publishing Resolutions / 发布决议</h3>
+<ul><li>Only authorized publisher role (typically Chair) can publish.</li><li>System validates prerequisites based on frozen resolution rules.</li><li>Select final conclusion from allowed list.</li><li>Optional conditional notes for Conditional Pass.</li><li>Resolution snapshots all votes, checklist results, indicators, linked issues.</li><li>Veto enforcement: veto role rejection blocks "pass".</li><li>Resolutions are immutable once published.</li></ul>
+<h3>5.7 Remediation & Closure / 整改与闭环</h3>
+<ul><li>Create remediation work items after resolution publication.</li><li>Items are ONES issues with link_type = remediation.</li><li>Status changes monitored via event hooks.</li><li>When all remediation items done: publisher confirms completion -> Completed state.</li><li>Or trigger re-review -> re_reviewing state with new round.</li><li>Remediation items are locked (cannot delete while locked).</li></ul>
+<h3>5.8 Round Comparison / 多轮对比</h3>
+<p>Compare Rounds tab shows side-by-side: reviewer opinions, resolution conclusions, indicator values, material statuses across review rounds.</p>
+<div class="break"></div><h2>6. State Machine & Transitions / 状态机与流转</h2>
+<p>Complete state machine for review lifecycle. Each review has review_state (fine-grained) + backward-compatible status field.</p>
+<h3>States / 状态列表</h3>
+<ul><li>draft: Initial state, freely editable.</li><li>ready: Configured and ready to start.</li><li>reviewing: Active review, reviewers submitting opinions.</li><li>awaiting_resolution: Prerequisites met, waiting for publisher.</li><li>resolution_published: Resolution has been published.</li><li>remediation_pending: Tracking remediation work items.</li><li>re_reviewing: New round after remediation.</li><li>completed: Successfully completed.</li><li>rejected: Review was rejected.</li><li>canceled: Review withdrawn.</li><li>archived: Long-term storage (terminal).</li></ul>
+<h3>Valid Transitions / 合法流转</h3>
+<ul><li>draft -> ready, reviewing, canceled</li><li>ready -> reviewing, draft, canceled</li><li>reviewing -> awaiting_resolution, remediation_pending, draft, canceled</li><li>awaiting_resolution -> resolution_published, remediation_pending, reviewing, canceled</li><li>resolution_published -> completed, rejected, remediation_pending</li><li>remediation_pending -> re_reviewing, canceled</li><li>re_reviewing -> awaiting_resolution, canceled</li><li>completed -> archived</li><li>rejected -> draft, archived</li><li>canceled -> archived, draft, reviewing</li></ul>
+<div class="note">Each transition is recorded in state_history_json (up to 100 entries) with timestamp, operator, reason, and round number.</div>
+<h3>Round Tracking / 轮次追踪</h3>
+<ul><li>round_no: Current round (starts at 1, increments on re_reviewing).</li><li>round_state: Per-round state.</li><li>Opinions, resolutions, materials, issues all tagged with round_no.</li></ul>
+<div class="break"></div><h2>7. Permissions / 权限管理</h2>
+<ul><li>dcp_admin: Modify templates, rules, global config (Template Config page).</li><li>dcp_create_review: Create DCP/TR reviews in projects.</li><li>dcp_view_review: Access team-wide review overview dashboard.</li></ul>
+<p>Permissions checked via ONES batch_check API. Server-side enforcement: operator identity from Ones-User-Id header.</p>
+<h2>8. Notifications & Reminders / 通知与催办</h2>
+<h3>Automated Notifications / 自动通知</h3>
+<ul><li>Review Start: All reviewers notified on reviewing state.</li><li>All Submitted: Publisher notified when prerequisites met.</li><li>Resolution Published: All reviewers notified of final decision.</li><li>Channels: Email, WeChat, DingTalk, Feishu, YouDao.</li></ul>
+<h3>Manual Reminders / 手动催办</h3>
+<ul><li>Remind Reviewers: Nudge unsubmitted reviewers.</li><li>Remind Publisher: Nudge when awaiting resolution.</li><li>Cooldown mechanism prevents spam.</li></ul>
+<div class="break"></div><h2>9. Linked Issues & Remediation / 关联工作项与整改</h2>
+<h3>General Linked Issues / 关联工作项</h3>
+<ul><li>Search and link existing ONES issues by UUID or number.</li><li>Real-time status synchronization.</li><li>Each link records: UUID, number, title, type, status, linker, timestamp.</li><li>Tagged with round_no for multi-round tracking.</li></ul>
+<h3>Creating New Work Items / 新建工作项</h3>
+<ul><li>Select issue type from project-scoped list.</li><li>Enter title and assignee.</li><li>Auto-linked to review.</li><li>Fallback URL if direct creation fails.</li></ul>
+<h3>Remediation Work Items / 整改工作项</h3>
+<ul><li>Special linked issues with link_type = remediation.</li><li>Created after resolution to track corrective actions.</li><li>Status changes monitored via ONES event hooks.</li><li>All done -> review can transition to completed.</li><li>Locked items cannot be deleted while locked.</li></ul>
+<div class="break"></div><h2>10. Audit Trail / 审计追溯</h2>
+<p>Every significant action is logged:</p>
+<ul><li>Review creation, deletion, recreation.</li><li>Status transitions and state changes.</li><li>Material submissions and updates.</li><li>Indicator updates.</li><li>Reviewer assignments and opinion submissions.</li><li>Resolution generation and publication.</li><li>Issue linking and remediation tracking.</li><li>Supplement notes.</li></ul>
+<p>Each entry records: timestamp, operator UUID, action, target, detail, result. Accessible from the Audit tab in review detail.</p>
+<div class="note">Resolutions are immutable audit records. Once published, they snapshot all votes, checklist results, indicators, and linked issues — creating an unalterable compliance record.</div>
+<div class="break"></div><h2>11. FAQ & Troubleshooting / 常见问题</h2>
+<h3>Can I change templates after review creation?</h3>
+<p>Yes, template changes apply only to new reviews. Existing reviews use frozen snapshots from creation time for auditability.</p>
+<h3>Why is "Publish Resolution" disabled?</h3>
+<p>Prerequisites not met. Check: required reviewers submitted, submit requirement mode, publisher role authorization. System shows what is missing.</p>
+<h3>How to handle a failed/rejected review?</h3>
+<p>Use "Recreate" button. Copies config into new draft with latest templates and new review number. Original review stays in audit trail.</p>
+<h3>What happens when I recall a review?</h3>
+<p>Depending on settings: may clear opinions and return to draft. Only allowed if enabled and before resolution. Logged in audit trail.</p>
+<h3>How are multi-round reviews tracked?</h3>
+<p>round_no increments on re_reviewing. All entities tagged with round_no. "Compare Rounds" tab shows side-by-side comparison.</p>
+<h3>Cannot see DCP Review tab in project?</h3>
+<p>Ensure: plugin installed at org level, project custom component configured with DCP Review, you have dcp_create_review permission.</p>
+<h3>How to configure resolution publisher?</h3>
+<p>Template Config > Resolution Rules > set Publisher role per review type (DCP/TR). Only that role sees publishing controls.</p>
+<h3>Can I delete a review?</h3>
+<p>Only draft reviews. Only original creator. Deletion removes all sub-entities (materials, indicators, reviewers, issues, logs).</p>
+<h3>What notification channels are supported?</h3>
+<p>Email, WeChat (WeCom), DingTalk, Feishu (Lark), YouDao. Each individually toggled. Include direct review links.</p>
+<div class="break"></div><h2>12. Appendix: API Reference / 附录：API 参考</h2>
+<p>All endpoints: /team/:teamUUID/dcp/... managed through ONES plugin routing.</p>
+<h3>Configuration / 配置</h3>
+<ul><li>GET /dcp/config - Get all configuration</li><li>POST /dcp/config - Save config (admin only)</li></ul>
+<h3>Review CRUD / 评审单管理</h3>
+<ul><li>POST /dcp/review - Create review</li><li>GET /dcp/review/:uuid - Get full detail</li><li>DELETE /dcp/review/:uuid - Delete draft (creator only)</li><li>POST /dcp/review/:uuid/recreate - Recreate from rejected</li><li>GET /dcp/reviews/by-project/:puuid - List by project</li><li>GET /dcp/reviews/team - List all team reviews</li><li>GET /dcp/reviews/my - List current user reviews</li><li>POST /dcp/review/:uuid/basic-info - Update basic info</li></ul>
+<h3>Review Workflow / 评审流程</h3>
+<ul><li>POST /dcp/review/:uuid/start - Start (draft->reviewing)</li><li>POST /dcp/review/:uuid/recall - Recall to draft</li><li>POST /dcp/review/:uuid/transition - State transition</li><li>GET /dcp/review/:uuid/state - Get state + transitions</li><li>GET /dcp/review/:uuid/rounds - Get round comparison data</li></ul>
+<h3>Materials / 材料管理</h3>
+<ul><li>POST /dcp/review/:uuid/material-status - Update status</li><li>POST /dcp/review/:uuid/material-upload - Upload file</li><li>POST /dcp/review/:uuid/material-remove - Remove file</li><li>GET /dcp/review/:uuid/material/:tid/upload-url - Upload URL</li><li>GET /dcp/review/:uuid/material/:tid/download-url - Download URL</li><li>GET /dcp/review/:uuid/material/:tid/preview - Preview file</li></ul>
+<h3>Reviewers, Indicators, Opinions / 评审人、指标、意见</h3>
+<ul><li>POST /dcp/review/:uuid/indicators - Update indicators</li><li>POST /dcp/review/:uuid/reviewers - Update reviewers</li><li>POST /dcp/review/:uuid/opinion - Submit opinion</li></ul>
+<h3>Issues & Remediation / 工作项与整改</h3>
+<ul><li>POST /dcp/review/:uuid/link-issue - Link existing issue</li><li>GET /dcp/review/:uuid/linked-issues - List linked issues</li><li>POST /dcp/review/:uuid/create-issue - Create and link</li><li>GET /dcp/review/:uuid/remediation - Get remediation items</li><li>POST /dcp/review/:uuid/remediation/refresh - Refresh statuses</li><li>POST /dcp/review/:uuid/remediation/sync - Sync statuses</li><li>POST /dcp/review/:uuid/remediation/confirm - Confirm complete</li></ul>
+<h3>Resolution & Audit / 决议与审计</h3>
+<ul><li>POST /dcp/review/:uuid/generate-resolution - Generate draft resolution</li><li>POST /dcp/review/:uuid/publish-resolution - Publish final resolution</li><li>POST /dcp/review/:uuid/supplement - Add supplemental note</li><li>GET /dcp/review/:uuid/audit-log - Get audit trail</li><li>POST /dcp/review/:uuid/checklist - Submit checklist results</li><li>POST /dcp/review/:uuid/remind - Send reminder</li></ul>
+<h3>Data Entities / 数据实体</h3>
+<ul><li>dcp_base_config: Global key-value configuration</li><li>dcp_phase_template: Phase definitions with dependencies</li><li>dcp_material_template: Material requirements per phase</li><li>dcp_indicator_template: Indicator definitions with thresholds</li><li>dcp_reviewer_role: Reviewer role definitions</li><li>dcp_checklist_item: Checklist items per phase/role</li><li>dcp_checklist_result: Checklist check results</li><li>dcp_review: Main review record with state machine</li><li>dcp_review_material: Per-review material instances</li><li>dcp_review_indicator: Per-review indicator values</li><li>dcp_review_reviewer: Per-review reviewer votes</li><li>dcp_linked_issue: Linked work items</li><li>dcp_resolution: Published resolutions (immutable)</li><li>dcp_supplement: Supplemental notes</li><li>dcp_audit_log: Action audit trail</li></ul><div class="footer-text">--- End of Manual ---<br>DCP Review Center v1.29.0 &bull; ONES Plugin (app_id: 709xehle)<br>For support, contact your system administrator or the plugin maintainer.</div>
+</body></html>

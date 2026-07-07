@@ -878,14 +878,14 @@ function getEffectiveState(rv: any): string {
 }
 
 // 追加状态历史记录，返回新 JSON 字符串
-function appendStateHistory(rv: any, newState: string, by: string, reason: string): string {
+function appendStateHistory(rv: any, newState: string, by: string, reason: string, roundNo?: number): string {
   const history = jsonArr(rv.state_history_json || '[]')
   history.push({
     state: newState,
     at: Date.now(),
     by: by || '',
     reason: reason || '',
-    round_no: Number(rv.round_no || 1),
+    round_no: roundNo ?? Number(rv.round_no || 1),
     from_state: getEffectiveState(rv),
   })
   // 保留最近 100 条，防止 32KB 溢出
@@ -903,14 +903,14 @@ function isValidTransition(from: string, to: string): boolean {
 // 不单独 set——调用方在已有的 review.set 中合并新字段
 function buildStateTransition(rv: any, newState: string, by: string, reason: string, extra?: Record<string, any>): Record<string, any> {
   const currentState = getEffectiveState(rv)
-  const historyJson = appendStateHistory(rv, newState, by, reason)
-  const newStatus = stateToStatus(newState)
-  const newRoundState = stateToRoundState(newState)
-  // 进入 re_reviewing 时开启新轮次
+  // 进入 re_reviewing 时开启新轮次——先算出新 round_no，再传给 appendStateHistory
   let newRoundNo = Number(rv.round_no || 1)
   if (newState === 're_reviewing' && currentState === 'remediation_pending') {
     newRoundNo = newRoundNo + 1
   }
+  const historyJson = appendStateHistory(rv, newState, by, reason, newRoundNo)
+  const newStatus = stateToStatus(newState)
+  const newRoundState = stateToRoundState(newState)
   return {
     ...extra,
     review_state: newState,
@@ -3717,11 +3717,7 @@ export async function getReviewRounds(req: any): Promise<PluginResponse> {
         start_state: r.start_state,
         end_state: r.end_state || r.start_state,
         state_count: r.states.length,
-        resolution: resolutions.find((res: any) => {
-          // 决议时间在该轮次的开始和结束之间
-          const publishedAt = Number(res.published_at || 0)
-          return publishedAt >= r.started_at && (!r.ended_at || publishedAt <= r.ended_at)
-        }) || null,
+        resolution: resolutions.find((res: any) => Number(res.round_no || 1) === r.round_no) || null,
       })),
     }
   }
