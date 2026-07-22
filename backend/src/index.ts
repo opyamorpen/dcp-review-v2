@@ -1763,6 +1763,7 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
     submitted_count: s.submitted_count,
     first_round_pass: s.first_round_pass,
     first_round_reject: s.first_round_reject,
+    first_round_total: s.first_round_total,
     first_round_pass_rate: s.first_round_total > 0
       ? Math.round(s.first_round_pass / s.first_round_total * 100) : 0,
     reject_rate: s.first_round_total > 0
