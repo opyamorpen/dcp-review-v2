@@ -1762,10 +1762,10 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
     first_round_pass: s.first_round_pass,
     first_round_reject: s.first_round_reject,
     first_round_total: s.first_round_total,
-    first_round_pass_rate: s.first_round_total > 0
-      ? Math.round(s.first_round_pass / s.first_round_total * 100) : 0,
-    reject_rate: s.first_round_total > 0
-      ? Math.round(s.first_round_reject / s.first_round_total * 100) : 0,
+    first_round_pass_rate: s.submitted_count > 0
+      ? Math.round(s.first_round_pass / s.submitted_count * 100) : 0,
+    reject_rate: s.submitted_count > 0
+      ? Math.round(s.first_round_reject / s.submitted_count * 100) : 0,
   })).sort((a: any, b: any) => b.total_participated - a.total_participated)
 
   const totalReviewers = reviewerList.length
