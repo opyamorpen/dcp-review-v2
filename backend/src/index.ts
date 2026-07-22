@@ -1625,41 +1625,8 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
   const allPhases = await qAll(phaseTpl)
   const phMap = new Map(allPhases.map((p: any) => [p.phase_code, p.phase_name]))
 
-  // 解析团队成员 uuid→name（使用 items/graphql，与 findProjectByGraphQL 同模式）
-  const nameMap = new Map<string, string>()
-  const reviewerUuids = new Set<string>()
-  for (const rvr of allReviewers) {
-    if (rvr.reviewer_uuid) reviewerUuids.add(rvr.reviewer_uuid)
-  }
-  let _debugNameMap = ''
-  if (tuid && reviewerUuids.size > 0) {
-    try {
-      const uuidList = Array.from(reviewerUuids)
-      const gqlRes = await OPFetch(
-        `/project/api/project/team/${tuid}/items/graphql?t=dcp_user_resolve`,
-        {
-          method: 'POST',
-          teamUUID: tuid,
-          headers: { 'Content-Type': 'application/json' },
-          data: {
-            query: `{ users(uuids: ${JSON.stringify(uuidList)}) { uuid name } }`,
-            variables: {},
-          },
-        }
-      ) as any
-      const users = gqlRes?.data?.data?.users || gqlRes?.data?.users || gqlRes?.users || []
-      for (const u of users) {
-        if (u.uuid && u.name) nameMap.set(u.uuid, u.name)
-      }
-      Logger.info(`[DCP][stats] resolved ${nameMap.size}/${uuidList.length} user names via graphql`)
-      _debugNameMap = `tuid=${tuid}, uuids=${uuidList.length}, resolved=${nameMap.size}, users=${users.length}, rawType=${typeof gqlRes}, rawKeys=${Object.keys(gqlRes || {}).join(',')}, rawSample=${JSON.stringify(gqlRes).substring(0, 200)}`
-    } catch (err: any) {
-      _debugNameMap = `tuid=${tuid}, error=${err?.message || String(err)}`
-      Logger.info(`[DCP][stats] user name resolve failed: ${err?.message || err}`)
-    }
-  } else {
-    _debugNameMap = `tuid='${tuid}', reviewerUuids=${reviewerUuids.size}`
-  }
+  // 评审人用户名由前端解析（OPFetch 从插件后端调 ONES 内部 API 404）
+  // 前端 fetch /project/api/project/team/{uuid}/members 可成功获取
 
   // 按时间过滤
   const filteredReviews = allReviews.filter((r: any) => {
@@ -1787,7 +1754,7 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
 
   const reviewerList = Array.from(reviewerStats.values()).map((s: any) => ({
     reviewer_uuid: s.reviewer_uuid,
-    reviewer_name: nameMap.get(s.reviewer_uuid) || s.reviewer_name || s.reviewer_uuid,
+    reviewer_name: s.reviewer_name || s.reviewer_uuid,
     roles: Array.from(s.roles),
     total_participated: s.total_participated,
     submitted_count: s.submitted_count,
@@ -1856,7 +1823,6 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
     },
     // 时间范围
     time_range: { start_date: startDate, end_date: endDate },
-    _debug: _debugNameMap,
   }}
 }
 

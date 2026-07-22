@@ -355,11 +355,29 @@ const App: React.FC = () => {
     try {
       const qs = s ? `?start_date=${s}&end_date=${e}` : ''
       const data = await apiGet(`/dcp/stats${qs}`)
+      // 前端解析评审人真实姓名（后端 OPFetch 调 ONES 内部 API 404）
+      const tu = getTeamUUID()
+      if (tu && data.reviewers?.list?.length) {
+        try {
+          const memRes = await fetch(`/project/api/project/team/${tu}/members`, { credentials: 'include' })
+          if (memRes.ok) {
+            const memJson = await memRes.json()
+            const members = memJson?.members || []
+            const nameMap = new Map<string, string>()
+            for (const m of members) {
+              if (m.uuid && m.name) nameMap.set(m.uuid, m.name)
+            }
+            data.reviewers.list = data.reviewers.list.map((rvr: any) => ({
+              ...rvr,
+              reviewer_name: nameMap.get(rvr.reviewer_uuid) || rvr.reviewer_name || rvr.reviewer_uuid,
+            }))
+          }
+        } catch { /* 静默失败，保留 UUID */ }
+      }
       setStats(data)
       // 同时加载全部评审用于穿透
       const revData = await apiGet('/dcp/reviews/team')
       const rawReviews = revData.reviews || []
-      const tu = getTeamUUID()
       const fixedReviews = tu ? await hydrateProjectNames(tu, rawReviews) : rawReviews
       setAllReviews(fixedReviews)
     } catch (e: any) { setMsg('加载失败: ' + e.message) }
