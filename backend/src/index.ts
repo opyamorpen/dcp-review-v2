@@ -1647,7 +1647,7 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
           },
         }
       ) as any
-      const users = gqlRes?.data?.users || gqlRes?.users || []
+      const users = gqlRes?.data?.data?.users || gqlRes?.data?.users || gqlRes?.users || []
       for (const u of users) {
         if (u.uuid && u.name) nameMap.set(u.uuid, u.name)
       }
