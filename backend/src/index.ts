@@ -1722,7 +1722,7 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
   const reviewerStats = new Map<string, {
     reviewer_uuid: string; reviewer_name: string; roles: Set<string>
     total_participated: number; first_round_pass: number; first_round_reject: number
-    submitted_count: number
+    first_round_total: number; submitted_count: number
   }>()
 
   for (const r of filteredReviews) {
@@ -1735,7 +1735,7 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
         st = {
           reviewer_uuid: uid, reviewer_name: rvr.reviewer_name || uid,
           roles: new Set(), total_participated: 0, first_round_pass: 0,
-          first_round_reject: 0, submitted_count: 0,
+          first_round_reject: 0, first_round_total: 0, submitted_count: 0,
         }
         reviewerStats.set(uid, st)
       }
@@ -1746,8 +1746,11 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
       const roundNo = rvr.round_no || 1
       if (roundNo === 1) {
         const c = rvr.conclusion || ''
-        if (c === 'pass' || c === 'conditional_pass') st.first_round_pass++
-        if (c === 'reject' || c === 'fail') st.first_round_reject++
+        if (c) {
+          st.first_round_total++
+          if (c === 'pass' || c === 'conditional_pass') st.first_round_pass++
+          if (c === 'reject' || c === 'fail') st.first_round_reject++
+        }
       }
     }
   }
@@ -1760,10 +1763,10 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
     submitted_count: s.submitted_count,
     first_round_pass: s.first_round_pass,
     first_round_reject: s.first_round_reject,
-    first_round_pass_rate: s.first_round_pass > 0
-      ? Math.round(s.first_round_pass / (s.first_round_pass + s.first_round_reject) * 100) : 0,
-    reject_rate: (s.first_round_pass + s.first_round_reject) > 0
-      ? Math.round(s.first_round_reject / (s.first_round_pass + s.first_round_reject) * 100) : 0,
+    first_round_pass_rate: s.first_round_total > 0
+      ? Math.round(s.first_round_pass / s.first_round_total * 100) : 0,
+    reject_rate: s.first_round_total > 0
+      ? Math.round(s.first_round_reject / s.first_round_total * 100) : 0,
   })).sort((a: any, b: any) => b.total_participated - a.total_participated)
 
   const totalReviewers = reviewerList.length
