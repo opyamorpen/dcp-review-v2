@@ -1625,19 +1625,40 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
   const allPhases = await qAll(phaseTpl)
   const phMap = new Map(allPhases.map((p: any) => [p.phase_code, p.phase_name]))
 
-  // 解析团队成员 uuid→name（REST API，非 GraphQL）
+  // 解析团队成员 uuid→name（使用 items/graphql，与 findProjectByGraphQL 同模式）
   const nameMap = new Map<string, string>()
-  if (tuid) {
+  const reviewerUuids = new Set<string>()
+  for (const rvr of allReviewers) {
+    if (rvr.reviewer_uuid) reviewerUuids.add(rvr.reviewer_uuid)
+  }
+  let _debugNameMap = ''
+  if (tuid && reviewerUuids.size > 0) {
     try {
-      const memRes = await OPFetch(`/project/api/project/team/${tuid}/members`, { teamUUID: tuid }) as any
-      const members = memRes?.data?.members || memRes?.members || []
-      for (const m of members) {
-        if (m.uuid && m.name) nameMap.set(m.uuid, m.name)
+      const uuidList = Array.from(reviewerUuids)
+      const gqlRes = await OPFetch(
+        `/project/api/project/team/${tuid}/items/graphql?t=dcp_user_resolve`,
+        {
+          method: 'POST',
+          teamUUID: tuid,
+          headers: { 'Content-Type': 'application/json' },
+          data: {
+            query: `{ users(uuids: ${JSON.stringify(uuidList)}) { uuid name } }`,
+            variables: {},
+          },
+        }
+      ) as any
+      const users = gqlRes?.data?.users || gqlRes?.users || []
+      for (const u of users) {
+        if (u.uuid && u.name) nameMap.set(u.uuid, u.name)
       }
-      Logger.info(`[DCP][stats] resolved ${nameMap.size} team members`)
+      Logger.info(`[DCP][stats] resolved ${nameMap.size}/${uuidList.length} user names via graphql`)
+      _debugNameMap = `tuid=${tuid}, uuids=${uuidList.length}, resolved=${nameMap.size}, users=${users.length}, rawKeys=${Object.keys(gqlRes || {}).join(',')}`
     } catch (err: any) {
-      Logger.info(`[DCP][stats] members API failed: ${err?.message || err}`)
+      _debugNameMap = `tuid=${tuid}, error=${err?.message || String(err)}`
+      Logger.info(`[DCP][stats] user name resolve failed: ${err?.message || err}`)
     }
+  } else {
+    _debugNameMap = `tuid='${tuid}', reviewerUuids=${reviewerUuids.size}`
   }
 
   // 按时间过滤
