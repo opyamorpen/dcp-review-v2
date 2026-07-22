@@ -1742,9 +1742,9 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
       st.total_participated++
       if (rvr.role_name) st.roles.add(rvr.role_name)
       if (rvr.submitted_at > 0) st.submitted_count++
-      // 首轮通过率：只看 round_no=1 的投票
+      // 首轮通过率：只看 round_no=1 且已提交的投票
       const roundNo = rvr.round_no || 1
-      if (roundNo === 1) {
+      if (roundNo === 1 && rvr.submitted_at > 0) {
         st.first_round_total++  // 分母=首轮已提交数
         const c = rvr.conclusion || ''
         if (c === 'pass' || c === 'conditional_pass') st.first_round_pass++
