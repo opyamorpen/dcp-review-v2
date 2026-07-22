@@ -1037,6 +1037,33 @@ export async function createReview(req: any): Promise<PluginResponse> {
   const rvUuid = makeUuid()
   const now = Date.now()
   const reviewType = review_type || 'dcp'
+
+  // 校验：同项目同阶段同类型已有决议通过（pass / conditional_pass）的评审单时，禁止重复发起
+  const existingRvs = await qAll(review, (v: any) =>
+    v.project_uuid === project_uuid &&
+    v.phase_code === phase_code &&
+    (v.review_type || 'dcp') === reviewType &&
+    v.status === 'completed'
+  )
+  if (existingRvs.length > 0) {
+    const allPhases = await qAll(phaseTpl)
+    const phMap = new Map(allPhases.map((p: any) => [p.phase_code, p.phase_name]))
+    // 检查是否有决议结论为 pass 或 conditional_pass
+    for (const erv of existingRvs) {
+      const resolutions = await qAll(resolution, (v: any) => v.review_uuid === erv.review_uuid)
+      const passed = resolutions.some((r: any) =>
+        r.final_conclusion === 'pass' || r.final_conclusion === 'conditional_pass'
+      )
+      if (passed) {
+        const phaseName = phMap.get(phase_code) || phase_code
+        return {
+          body: { error: `${reviewType === 'tr' ? 'TR' : 'DCP'}阶段「${phaseName}」已通过评审，不可重复发起` },
+          statusCode: 400,
+        }
+      }
+    }
+  }
+
   // 固化决议规则：创建时把当前规则 + 依赖角色模板的展开结果一次性写入评审单
   let frozenRuleJson = ''
   try {
