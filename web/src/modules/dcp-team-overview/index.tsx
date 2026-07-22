@@ -171,7 +171,55 @@ function BarChart({ data, color, onBarClick }: {
 }
 
 // ============================================================
-// 简易饼图
+// 简易 SVG 折线图（周趋势）
+// ============================================================
+function LineChart({ data, color }: {
+  data: { week: string; count: number }[]
+  color: string
+}) {
+  if (!data.length) return <div style={{ padding: 20, textAlign: 'center', color: '#999' }}>暂无数据</div>
+  const width = 800, height = 180
+  const pad = { top: 20, right: 20, bottom: 30, left: 40 }
+  const cw = width - pad.left - pad.right
+  const ch = height - pad.top - pad.bottom
+  const max = Math.max(...data.map((d: any) => d.count), 1)
+  const stepX = data.length > 1 ? cw / (data.length - 1) : 0
+  const points = data.map((d: any, i: number) => ({
+    x: pad.left + i * stepX,
+    y: pad.top + ch - (d.count / max) * ch,
+    ...d,
+  }))
+  const pathD = points.map((p: any, i: number) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ')
+  const labelStep = Math.max(1, Math.ceil(data.length / 8))
+  const yTicks = [0, Math.ceil(max / 2), max]
+  return (
+    <div style={{ width: '100%', overflowX: 'auto' }}>
+      <svg width={width} height={height} style={{ display: 'block' }}>
+        {yTicks.map((v: number, i: number) => {
+          const y = pad.top + ch - (v / max) * ch
+          return (
+            <g key={i}>
+              <line x1={pad.left} y1={y} x2={width - pad.right} y2={y} stroke="#f0f0f0" strokeDasharray="2,2" />
+              <text x={pad.left - 6} y={y + 4} textAnchor="end" fontSize="11" fill="#999">{v}</text>
+            </g>
+          )
+        })}
+        {points.map((p: any, i: number) => {
+          if (i % labelStep !== 0 && i !== points.length - 1) return null
+          return <text key={i} x={p.x} y={height - 8} textAnchor="middle" fontSize="10" fill="#999">{p.week}</text>
+        })}
+        <path d={pathD} fill="none" stroke={color} strokeWidth="2" />
+        {points.map((p: any, i: number) => (
+          <g key={i}>
+            <circle cx={p.x} cy={p.y} r="4" fill={color} />
+            <title>{p.week}: {p.count}</title>
+            {p.count > 0 && <text x={p.x} y={p.y - 10} textAnchor="middle" fontSize="11" fill={color} fontWeight="600">{p.count}</text>}
+          </g>
+        ))}
+      </svg>
+    </div>
+  )
+}
 // ============================================================
 function PieChart({ data, onClick }: {
   data: { label: string; value: number; color: string; filter?: any }[]
@@ -424,9 +472,9 @@ const App: React.FC = () => {
     label: p.phase_code, value: p.count, filter: { type: 'phase', value: p.phase_code }
   }))
 
-  // 月度趋势柱状图
-  const monthlyBarData = (trend.monthly_trend || []).map((m: any) => ({
-    label: m.month, value: m.count, filter: { type: 'all', value: '' }
+  // 周趋势折线图数据
+  const weeklyData = (trend.weekly_trend || []).map((w: any) => ({
+    week: w.week, count: w.count,
   }))
 
   // 项目柱状图
@@ -493,10 +541,10 @@ const App: React.FC = () => {
             ]} color="#1677ff" onBarClick={(f) => drillDownBy(f)} />
           </div>
         </div>
-        {monthlyBarData.length > 0 && (
+        {weeklyData.length > 0 && (
           <div style={{ marginTop: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>月度趋势</div>
-            <BarChart data={monthlyBarData} color="#722ed1" />
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>周趋势</div>
+            <LineChart data={weeklyData} color="#722ed1" />
           </div>
         )}
         {phaseBarData.length > 0 && (

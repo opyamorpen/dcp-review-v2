@@ -1605,12 +1605,11 @@ export async function listTeamReviews(req: any): Promise<PluginResponse> {
 // 评审统计 API — 三个维度聚合数据
 // ============================================================
 export async function getDcpStats(req: any): Promise<PluginResponse> {
-  const tuid = getParam(req, 'team_uuid') || getParam(req, 'teamUUID') || ''
-  if (!tuid) {
+  const tuid = getParam(req, 'team_uuid') || getParam(req, 'teamUUID') || (() => {
     const fullUrl = req.url || req.path || ''
     const m = fullUrl.match(/\/team\/([A-Za-z0-9_-]+)/)
-    if (m) { /* got tuid */ }
-  }
+    return m ? m[1] : ''
+  })()
   // 从 query string 解析时间范围
   const startDate = getParam(req, 'start_date') || ''
   const endDate = getParam(req, 'end_date') || ''
@@ -1625,6 +1624,21 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
   const allResolutions = await qAll(resolution)
   const allPhases = await qAll(phaseTpl)
   const phMap = new Map(allPhases.map((p: any) => [p.phase_code, p.phase_name]))
+
+  // 解析团队成员 uuid→name（REST API，非 GraphQL）
+  const nameMap = new Map<string, string>()
+  if (tuid) {
+    try {
+      const memRes = await OPFetch(`/project/api/project/team/${tuid}/members`, { teamUUID: tuid }) as any
+      const members = memRes?.data?.members || memRes?.members || []
+      for (const m of members) {
+        if (m.uuid && m.name) nameMap.set(m.uuid, m.name)
+      }
+      Logger.info(`[DCP][stats] resolved ${nameMap.size} team members`)
+    } catch (err: any) {
+      Logger.info(`[DCP][stats] members API failed: ${err?.message || err}`)
+    }
+  }
 
   // 按时间过滤
   const filteredReviews = allReviews.filter((r: any) => {
@@ -1656,7 +1670,17 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
   const statusTrend: Record<string, number> = {}
   const typeTrend: Record<string, number> = { dcp: 0, tr: 0 }
   const phaseTrend: Record<string, number> = {}
-  const monthlyTrend: Record<string, number> = {}
+  const weeklyTrend: Record<string, number> = {}
+
+  // 计算日期所在 ISO 周的 key（YYYY-Www）
+  function getWeekKey(d: Date): string {
+    const date = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+    const dayNum = date.getDay() || 7 // 周日=7
+    date.setDate(date.getDate() - dayNum + 1) // 回到本周周一
+    const yearStart = new Date(date.getFullYear(), 0, 1)
+    const weekNum = Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7)
+    return `${date.getFullYear()}-W${String(weekNum).padStart(2, '0')}`
+  }
 
   for (const r of filteredReviews) {
     const st = r.status || 'draft'
@@ -1672,11 +1696,36 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
     const pc = r.phase_code || '未知'
     phaseTrend[pc] = (phaseTrend[pc] || 0) + 1
 
-    // 按月统计
+    // 按周统计
     const d = new Date(r.created_at || 0)
     if (d.getTime() > 0) {
-      const mk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-      monthlyTrend[mk] = (monthlyTrend[mk] || 0) + 1
+      const wk = getWeekKey(d)
+      weeklyTrend[wk] = (weeklyTrend[wk] || 0) + 1
+    }
+  }
+
+  // 补全空周：生成时间范围内所有自然周序列
+  const weeklyList: { week: string; count: number }[] = []
+  if (Object.keys(weeklyTrend).length > 0) {
+    let startD: Date
+    let endD: Date
+    if (startTs && endTs) {
+      startD = new Date(startTs)
+      endD = new Date(endTs)
+    } else {
+      const allKeys = Object.keys(weeklyTrend).sort()
+      const first = allKeys[0].split('-W')
+      startD = new Date(parseInt(first[0]), 0, 1)
+      const last = allKeys[allKeys.length - 1].split('-W')
+      endD = new Date(parseInt(last[0]), 11, 31)
+    }
+    const cursor = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate())
+    const dayNum = cursor.getDay() || 7
+    cursor.setDate(cursor.getDate() - dayNum + 1) // 对齐到周一
+    while (cursor <= endD) {
+      const wk = getWeekKey(cursor)
+      weeklyList.push({ week: wk, count: weeklyTrend[wk] || 0 })
+      cursor.setDate(cursor.getDate() + 7)
     }
   }
 
@@ -1717,7 +1766,7 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
 
   const reviewerList = Array.from(reviewerStats.values()).map((s: any) => ({
     reviewer_uuid: s.reviewer_uuid,
-    reviewer_name: s.reviewer_name,
+    reviewer_name: nameMap.get(s.reviewer_uuid) || s.reviewer_name || s.reviewer_uuid,
     roles: Array.from(s.roles),
     total_participated: s.total_participated,
     submitted_count: s.submitted_count,
@@ -1773,7 +1822,7 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
       phase_trend: Object.entries(phaseTrend).map(([code, count]) => ({
         phase_code: code, phase_name: phMap.get(code) || code, count,
       })).sort((a: any, b: any) => b.count - a.count),
-      monthly_trend: Object.entries(monthlyTrend).sort().map(([month, count]) => ({ month, count })),
+      weekly_trend: weeklyList,
     },
     // 报表二：评审人参与统计
     reviewers: {
