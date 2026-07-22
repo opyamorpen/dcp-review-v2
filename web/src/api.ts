@@ -269,8 +269,7 @@ function buildUrl(endpoint: string): string {
   }
   // 分离已有 query string
   const [path, qs] = endpoint.split('?')
-  const sep = qs ? '&' : '?'
-  return `/project/api/project/team/${tu}${path}${sep}team_uuid=${tu}${qs ? '&' + qs : ''}`
+  return `/project/api/project/team/${tu}${path}?team_uuid=${tu}${qs ? '&' + qs : ''}`
 }
 
 export async function apiGet(endpoint: string): Promise<any> {

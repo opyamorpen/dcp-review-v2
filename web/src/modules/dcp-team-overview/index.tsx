@@ -340,14 +340,7 @@ const App: React.FC = () => {
       filtered = allReviews.filter(r => r.project_uuid === filter.value || r.project_identifier === filter.value)
       title = `项目 ${filter.value} 评审`
     } else if (filter.type === 'reviewer') {
-      filtered = allReviews.filter(r => {
-        return r.reviewer_total !== undefined && r.reviewer_total > 0 && r._reviewer_uuids?.includes(filter.value)
-      })
-      // 如果列表数据中无 reviewer_uuids 字段，从 stats 中查
-      if (filtered.length === 0 && stats) {
-        // 重新从全量评审查
-        filtered = allReviews.filter(r => r.reviewer_total > 0)
-      }
+      filtered = allReviews.filter(r => r.reviewer_uuids?.includes(filter.value))
       title = `评审人 ${filter.value} 参与的评审`
     } else if (filter.type === 'all') {
       filtered = allReviews

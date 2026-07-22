@@ -1588,6 +1588,7 @@ export async function listTeamReviews(req: any): Promise<PluginResponse> {
       phase_name: phMap.get(r.phase_code) || '',
       reviewer_total: reviewers.length,
       reviewer_done: submitted,
+      reviewer_uuids: reviewers.map((rvr: any) => rvr.reviewer_uuid).filter(Boolean),
       linked_issue_count: issues.length,
       material_total: reviewsMats.length,
       material_submitted: matSubmitted,
