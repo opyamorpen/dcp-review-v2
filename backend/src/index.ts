@@ -1652,7 +1652,7 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
         if (u.uuid && u.name) nameMap.set(u.uuid, u.name)
       }
       Logger.info(`[DCP][stats] resolved ${nameMap.size}/${uuidList.length} user names via graphql`)
-      _debugNameMap = `tuid=${tuid}, uuids=${uuidList.length}, resolved=${nameMap.size}, users=${users.length}, rawKeys=${Object.keys(gqlRes || {}).join(',')}`
+      _debugNameMap = `tuid=${tuid}, uuids=${uuidList.length}, resolved=${nameMap.size}, users=${users.length}, rawType=${typeof gqlRes}, rawKeys=${Object.keys(gqlRes || {}).join(',')}, rawSample=${JSON.stringify(gqlRes).substring(0, 200)}`
     } catch (err: any) {
       _debugNameMap = `tuid=${tuid}, error=${err?.message || String(err)}`
       Logger.info(`[DCP][stats] user name resolve failed: ${err?.message || err}`)
@@ -1856,6 +1856,7 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
     },
     // 时间范围
     time_range: { start_date: startDate, end_date: endDate },
+    _debug: _debugNameMap,
   }}
 }
 
