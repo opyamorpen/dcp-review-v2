@@ -2,7 +2,7 @@ service:
   app_id: 709xehle
   name: DCP评审中心
   description: 团队级DCP/TR评审插件。支持项目内发起DCP阶段决策评审和TR技术评审、多人异步评审、关联工作项、不可覆盖决议快照和审计追溯。
-  version: 1.29.3
+  version: 1.30.0
   mode: org
   logo: null
   language: nodejs
@@ -314,6 +314,11 @@ apis:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/remediation/confirm
     function: confirmRemediation
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/stats
+    function: getDcpStats
 events:
   - eventType: ones:project:issue-status:changed
     function: onIssueStatusChanged

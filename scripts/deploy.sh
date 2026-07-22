@@ -50,7 +50,8 @@ echo "文件: $OPK_FILE"
 echo ""
 
 # 提取 OPK 中的目标版本
-OPK_VERSION=$(cd /tmp && rm -rf opk_ver && mkdir opk_ver && cd opk_ver && gunzip -c "$OPK_FILE" 2>/dev/null | tar xf - config/plugin.yaml 2>/dev/null && grep "^  version:" config/plugin.yaml | awk '{print $2}' | head -1)
+OPK_ABS="$(cd "$(dirname "$OPK_FILE")" && pwd)/$(basename "$OPK_FILE")"
+OPK_VERSION=$(cd /tmp && rm -rf opk_ver && mkdir opk_ver && cd opk_ver && gunzip -c "$OPK_ABS" 2>/dev/null | tar xf - config/plugin.yaml 2>/dev/null && grep "^  version:" config/plugin.yaml | awk '{print $2}' | head -1)
 rm -rf /tmp/opk_ver
 if [[ -z "$OPK_VERSION" ]]; then
   OPK_VERSION="未知"

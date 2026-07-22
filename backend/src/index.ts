@@ -1601,6 +1601,194 @@ export async function listTeamReviews(req: any): Promise<PluginResponse> {
 }
 
 // ============================================================
+// 评审统计 API — 三个维度聚合数据
+// ============================================================
+export async function getDcpStats(req: any): Promise<PluginResponse> {
+  const tuid = getParam(req, 'team_uuid') || getParam(req, 'teamUUID') || ''
+  if (!tuid) {
+    const fullUrl = req.url || req.path || ''
+    const m = fullUrl.match(/\/team\/([A-Za-z0-9_-]+)/)
+    if (m) { /* got tuid */ }
+  }
+  // 从 query string 解析时间范围
+  const startDate = getParam(req, 'start_date') || ''
+  const endDate = getParam(req, 'end_date') || ''
+  let startTs = 0
+  let endTs = 0
+  if (startDate) { startTs = new Date(startDate + 'T00:00:00').getTime() }
+  if (endDate) { endTs = new Date(endDate + 'T23:59:59').getTime() }
+
+  // 加载全部数据
+  const allReviews = await qAll(review)
+  const allReviewers = await qAll(rvReviewer)
+  const allResolutions = await qAll(resolution)
+  const allPhases = await qAll(phaseTpl)
+  const phMap = new Map(allPhases.map((p: any) => [p.phase_code, p.phase_name]))
+
+  // 按时间过滤
+  const filteredReviews = allReviews.filter((r: any) => {
+    const ts = r.created_at || 0
+    if (startTs && ts < startTs) return false
+    if (endTs && ts > endTs) return false
+    return true
+  })
+
+  // 构建决议查找索引：review_uuid → resolutions[]
+  const resByReview = new Map<string, any[]>()
+  for (const res of allResolutions) {
+    const arr = resByReview.get(res.review_uuid) || []
+    arr.push(res)
+    resByReview.set(res.review_uuid, arr)
+  }
+
+  // 构建评审人查找索引：review_uuid → reviewers[]
+  const rvrsByReview = new Map<string, any[]>()
+  for (const rvr of allReviewers) {
+    const arr = rvrsByReview.get(rvr.review_uuid) || []
+    arr.push(rvr)
+    rvrsByReview.set(rvr.review_uuid, arr)
+  }
+
+  // ==================== 报表一：评审趋势统计 ====================
+  let total = filteredReviews.length
+  let reviewing = 0, completed = 0, rejected = 0, draft = 0
+  const statusTrend: Record<string, number> = {}
+  const typeTrend: Record<string, number> = { dcp: 0, tr: 0 }
+  const phaseTrend: Record<string, number> = {}
+  const monthlyTrend: Record<string, number> = {}
+
+  for (const r of filteredReviews) {
+    const st = r.status || 'draft'
+    if (st === 'reviewing') reviewing++
+    else if (st === 'completed') completed++
+    else if (st === 'rejected') rejected++
+    else draft++
+    statusTrend[st] = (statusTrend[st] || 0) + 1
+
+    const rt = r.review_type || 'dcp'
+    typeTrend[rt] = (typeTrend[rt] || 0) + 1
+
+    const pc = r.phase_code || '未知'
+    phaseTrend[pc] = (phaseTrend[pc] || 0) + 1
+
+    // 按月统计
+    const d = new Date(r.created_at || 0)
+    if (d.getTime() > 0) {
+      const mk = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      monthlyTrend[mk] = (monthlyTrend[mk] || 0) + 1
+    }
+  }
+
+  // ==================== 报表二：评审人参与统计 ====================
+  // 按 reviewer_uuid 聚合，只统计时间范围内的评审
+  const reviewerStats = new Map<string, {
+    reviewer_uuid: string; reviewer_name: string; roles: Set<string>
+    total_participated: number; first_round_pass: number; first_round_reject: number
+    submitted_count: number
+  }>()
+
+  for (const r of filteredReviews) {
+    const reviewers = rvrsByReview.get(r.review_uuid) || []
+    for (const rvr of reviewers) {
+      const uid = rvr.reviewer_uuid || ''
+      if (!uid) continue
+      let st = reviewerStats.get(uid)
+      if (!st) {
+        st = {
+          reviewer_uuid: uid, reviewer_name: rvr.reviewer_name || uid,
+          roles: new Set(), total_participated: 0, first_round_pass: 0,
+          first_round_reject: 0, submitted_count: 0,
+        }
+        reviewerStats.set(uid, st)
+      }
+      st.total_participated++
+      if (rvr.role_name) st.roles.add(rvr.role_name)
+      if (rvr.submitted_at > 0) st.submitted_count++
+      // 首轮通过率：只看 round_no=1 的投票
+      const roundNo = rvr.round_no || 1
+      if (roundNo === 1) {
+        const c = rvr.conclusion || ''
+        if (c === 'pass' || c === 'conditional_pass') st.first_round_pass++
+        if (c === 'reject' || c === 'fail') st.first_round_reject++
+      }
+    }
+  }
+
+  const reviewerList = Array.from(reviewerStats.values()).map((s: any) => ({
+    reviewer_uuid: s.reviewer_uuid,
+    reviewer_name: s.reviewer_name,
+    roles: Array.from(s.roles),
+    total_participated: s.total_participated,
+    submitted_count: s.submitted_count,
+    first_round_pass: s.first_round_pass,
+    first_round_reject: s.first_round_reject,
+    first_round_pass_rate: s.first_round_pass > 0
+      ? Math.round(s.first_round_pass / (s.first_round_pass + s.first_round_reject) * 100) : 0,
+    reject_rate: (s.first_round_pass + s.first_round_reject) > 0
+      ? Math.round(s.first_round_reject / (s.first_round_pass + s.first_round_reject) * 100) : 0,
+  })).sort((a: any, b: any) => b.total_participated - a.total_participated)
+
+  const totalReviewers = reviewerList.length
+
+  // ==================== 报表三：项目维度统计 ====================
+  const projectMap = new Map<string, { project_uuid: string; total: number; completed: number; passed: number }>()
+
+  for (const r of filteredReviews) {
+    const pkey = r.project_uuid || '未知'
+    let ps = projectMap.get(pkey)
+    if (!ps) { ps = { project_uuid: pkey, total: 0, completed: 0, passed: 0 }; projectMap.set(pkey, ps) }
+    ps.total++
+    if (r.status === 'completed' || r.status === 'rejected') ps.completed++
+    // 检查是否有 pass/conditional_pass 决议
+    const resolutions = resByReview.get(r.review_uuid) || []
+    const passed = resolutions.some((res: any) =>
+      res.final_conclusion === 'pass' || res.final_conclusion === 'conditional_pass'
+    )
+    if (passed) ps.passed++
+  }
+
+  // 解析项目名称
+  const projectKeys = Array.from(projectMap.keys())
+  const projectMetaMap: Record<string, any> = {}
+  if (tuid && projectKeys.length > 0) {
+    await Promise.all(projectKeys.map(async (key) => {
+      projectMetaMap[key] = await resolveProjectMeta(tuid, key)
+    }))
+  }
+
+  const projectList = Array.from(projectMap.values()).map((ps) => ({
+    ...ps,
+    project_name: projectMetaMap[ps.project_uuid]?.project_name || ps.project_uuid,
+    project_identifier: projectMetaMap[ps.project_uuid]?.project_identifier || ps.project_uuid,
+    pass_rate: ps.completed > 0 ? Math.round(ps.passed / ps.completed * 100) : 0,
+  })).sort((a: any, b: any) => b.total - a.total)
+
+  return { body: {
+    // 报表一：评审趋势统计
+    trend: {
+      total, reviewing, completed, rejected, draft,
+      status_trend: statusTrend,
+      type_trend: typeTrend,
+      phase_trend: Object.entries(phaseTrend).map(([code, count]) => ({
+        phase_code: code, phase_name: phMap.get(code) || code, count,
+      })).sort((a: any, b: any) => b.count - a.count),
+      monthly_trend: Object.entries(monthlyTrend).sort().map(([month, count]) => ({ month, count })),
+    },
+    // 报表二：评审人参与统计
+    reviewers: {
+      total: totalReviewers,
+      list: reviewerList,
+    },
+    // 报表三：项目维度统计
+    projects: {
+      list: projectList,
+    },
+    // 时间范围
+    time_range: { start_date: startDate, end_date: endDate },
+  }}
+}
+
+// ============================================================
 // 我的评审（按评审人 UUID 筛选待办/已办）
 // ============================================================
 export async function listMyReviews(req: any): Promise<PluginResponse> {
