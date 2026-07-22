@@ -161,16 +161,32 @@ VERIFY_RESP=$(curl -s -X POST "$BASE_URL/project/api/project/team/$TEAM_UUID/plu
   -F "file=@$OPK_FILE" \
   -F "organization_uuid=$ORG_UUID")
 
-INSTALLED_VERSION=$(echo "$VERIFY_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['version'])" 2>/dev/null)
-echo "  安装记录版本: $INSTALLED_VERSION"
-echo "  OPK 目标版本: $OPK_VERSION"
+# 版本匹配后 upload_opk 返回 PluginAlreadyInstall，不返回 data.version
+# 需要处理两种情况：1) 返回 data.version 可比对  2) 返回 PluginAlreadyInstall 说明已安装
+VERIFY_CODE=$(echo "$VERIFY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('code',0))" 2>/dev/null)
+if [[ "$VERIFY_CODE" == "400" ]]; then
+  VERIFY_REASON=$(echo "$VERIFY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('reason',''))" 2>/dev/null)
+  if [[ "$VERIFY_REASON" == "PluginAlreadyInstall" ]]; then
+    # 插件已安装且版本匹配，平台拒绝重复上传
+    echo "  ✓ 版本已匹配 (PluginAlreadyInstall — 平台拒绝重复上传同版本)"
+    INSTALLED_VERSION="$OPK_VERSION"
+  else
+    echo "错误: upload_opk 返回异常: $VERIFY_REASON"
+    echo "$VERIFY_RESP" | head -5
+    exit 1
+  fi
+else
+  INSTALLED_VERSION=$(echo "$VERIFY_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['version'])" 2>/dev/null)
+  echo "  安装记录版本: $INSTALLED_VERSION"
+  echo "  OPK 目标版本: $OPK_VERSION"
 
-if [[ "$INSTALLED_VERSION" != "$OPK_VERSION" ]]; then
-  echo "错误: 版本不匹配 — 安装记录为 $INSTALLED_VERSION，目标为 $OPK_VERSION"
-  echo "  升级可能未真正生效，请检查 ONES 平台插件管理页面"
-  exit 1
+  if [[ "$INSTALLED_VERSION" != "$OPK_VERSION" ]]; then
+    echo "错误: 版本不匹配 — 安装记录为 $INSTALLED_VERSION，目标为 $OPK_VERSION"
+    echo "  升级可能未真正生效，请检查 ONES 平台插件管理页面"
+    exit 1
+  fi
+  echo "  ✓ 版本匹配"
 fi
-echo "  ✓ 版本匹配"
 
 # 5. 反查业务功能：reviews API
 echo "[5/5] 验证业务功能..."
