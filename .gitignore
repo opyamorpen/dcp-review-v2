@@ -20,3 +20,4 @@ node_modules
 /web/pkg
 /web/ones-plugin-node-host.log
 scripts/.env
+__pycache__/
