@@ -70,6 +70,11 @@ declare var ONESEntities: {
             created_at?: number;
             updated_at?: number;
             review_number?: string;
+            reviewer_profile_id?: string;
+            reviewer_profile_name?: string;
+            reviewer_profile_snapshot_json?: string;
+            reviewer_binding_snapshot_json?: string;
+            reviewer_role_assignments_snapshot_json?: string;
             reviewers_json?: string;
             checklist_json?: string;
             review_type?: string;
@@ -82,6 +87,8 @@ declare var ONESEntities: {
             config_version_note?: string;
             role_templates_json?: string;
             checklist_templates_json?: string;
+            bound_profile_id?: string;
+            profile_snapshot_json?: string;
         };
         indexes: null;
     };
@@ -128,6 +135,9 @@ declare var ONESEntities: {
             review_uuid?: string;
             reviewer_uuid?: string;
             role_name?: string;
+            selection_mode?: string;
+            default_reviewer_uuid?: string;
+            candidate_uuids_json?: string;
             conclusion?: string;
             risk_level?: string;
             opinion_summary?: string;
@@ -216,6 +226,28 @@ declare var ONESEntities: {
             status?: string;
             checked_by?: string;
             checked_at?: number;
+        };
+        indexes: null;
+    };
+    dcp_reviewer_profile: {
+        attributes: {
+            profile_name?: string;
+            review_type?: string;
+            description?: string;
+            role_assignments_json?: string;
+            created_by?: string;
+            created_at?: number;
+            updated_at?: number;
+        };
+        indexes: null;
+    };
+    dcp_project_binding: {
+        attributes: {
+            project_uuid?: string;
+            profile_id?: string;
+            review_type?: string;
+            created_by?: string;
+            created_at?: number;
         };
         indexes: null;
     };

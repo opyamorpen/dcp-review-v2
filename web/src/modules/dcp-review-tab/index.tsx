@@ -437,13 +437,15 @@ const UserPicker: React.FC<{
   onChange: (user: { uuid: string; name: string }) => void
   placeholder?: string
   displayName?: string
-}> = ({ value, onChange, placeholder = '搜索用户姓名或邮箱…', displayName }) => {
+  allowedUserIds?: string[]  // 限制可选用户范围（空=不限制）
+}> = ({ value, onChange, placeholder = '搜索用户姓名或邮箱…', displayName, allowedUserIds }) => {
   const [results, setResults] = useState<{ uuid: string; name: string; email: string }[]>([])
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [selectedName, setSelectedName] = useState('')
   const timerRef = React.useRef<any>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
+  const allowedSet = React.useMemo(() => allowedUserIds && allowedUserIds.length > 0 ? new Set(allowedUserIds) : null, [allowedUserIds])
 
   // 外部 value 清空时同步重置内部状态
   useEffect(() => {
@@ -460,8 +462,9 @@ const UserPicker: React.FC<{
     if (kw.trim().length < 1) { setResults([]); setOpen(false); return }
     setLoading(true)
     api.searchUsers(kw.trim()).then(users => {
-      setResults(users)
-      setOpen(users.length > 0)
+      const filtered = allowedSet ? users.filter(u => allowedSet.has(u.uuid)) : users
+      setResults(filtered)
+      setOpen(filtered.length > 0)
       setLoading(false)
     }).catch(() => { setResults([]); setOpen(false); setLoading(false) })
   }
@@ -633,14 +636,12 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     { key: 'compare', label: '轮次对比' },
     { key: 'timeline', label: '状态轨迹' },
     { key: 'audit', label: '审计日志' },
-  ].filter(t => {
-    if (t.key === 'compare') {
-      // 仅在≥2轮时显示：历史决议数+当前轮≥2
-      const totalRounds = (data.resolutions || []).length + (data.resolution ? 0 : 1)
-      return totalRounds >= 2 || (rv.round_no || 1) >= 2
-    }
-    return true
-  })
+  ]
+  const totalRounds = (data.resolutions || []).length + (data.resolution ? 0 : 1)
+  if (totalRounds < 2 && (rv.round_no || 1) < 2) {
+    const idx = TABS.findIndex(t => t.key === 'compare')
+    if (idx >= 0) TABS.splice(idx, 1)
+  }
 
   const [showPublishForm, setShowPublishForm] = useState(false)
   const [resolutionForm, setResolutionForm] = useState({ final_conclusion: '', condition_notes: '' })
@@ -1689,12 +1690,63 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
     const [publisherRole, setPublisherRole] = useState('')
     const reviewType = (data.review?.review_type || 'dcp')
 
+    // 解析冻结的 Profile 快照，构建角色约束
+    const profileSnapshot = React.useMemo(() => {
+      try {
+        const raw = data.review?.reviewer_role_assignments_snapshot_json
+        if (!raw) return null
+        const arr = typeof raw === 'string' ? JSON.parse(raw) : raw
+        if (!Array.isArray(arr) || arr.length === 0) return null
+        const map: Record<string, { mode: 'single' | 'pool'; default_reviewer_uuid: string; candidate_uuids: string[] }> = {}
+        for (const item of arr) {
+          if (!item.role_name) continue
+          map[item.role_name] = {
+            mode: item.mode === 'pool' ? 'pool' : 'single',
+            default_reviewer_uuid: String(item.default_reviewer_uuid || ''),
+            candidate_uuids: Array.isArray(item.candidate_uuids) ? item.candidate_uuids.filter((u: any) => !!u).map(String) : [],
+          }
+        }
+        return Object.keys(map).length > 0 ? map : null
+      } catch { return null }
+    }, [data.review?.reviewer_role_assignments_snapshot_json])
+
+    // 计算每个角色的 UserPicker 限制
+    function getRoleRestriction(roleName: string): { allowedUserIds?: string[]; defaultUuid?: string } {
+      if (!profileSnapshot) return {}
+      const snap = profileSnapshot[roleName]
+      if (!snap) return {} // 快照中没有的角色（管理员后来新增）→ 不限制
+      if (snap.mode === 'single') {
+        // 单人模式：仅允许默认人选
+        return {
+          allowedUserIds: snap.default_reviewer_uuid ? [snap.default_reviewer_uuid] : [],
+          defaultUuid: snap.default_reviewer_uuid || '',
+        }
+      }
+      // 候选池模式：限制为候选列表
+      return {
+        allowedUserIds: snap.candidate_uuids.length > 0 ? snap.candidate_uuids : undefined,
+      }
+    }
+
     useEffect(() => {
       const uuids = reviewers.map((r: any) => r.reviewer_uuid).filter(Boolean)
       if (uuids.length > 0) {
         api.resolveReviewerNames(uuids).then(setNameMap)
       }
-    }, [data.reviewers])
+      // 也加载 Profile 快照中的默认评审人/候选人名称
+      if (profileSnapshot) {
+        const profileUuids: string[] = []
+        for (const snap of Object.values(profileSnapshot)) {
+          if (snap.default_reviewer_uuid) profileUuids.push(snap.default_reviewer_uuid)
+          if (snap.candidate_uuids) profileUuids.push(...snap.candidate_uuids)
+        }
+        if (profileUuids.length > 0) {
+          api.resolveReviewerNames([...new Set(profileUuids)]).then(names => {
+            setNameMap(prev => ({ ...names, ...prev }))
+          })
+        }
+      }
+    }, [data.reviewers, profileSnapshot])
 
     useEffect(() => {
       api.getPluginConfig().then(c => {
@@ -1704,11 +1756,22 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
       }).catch(() => {})
     }, [reviewType])
 
-    // 草稿态：角色列表加载后自动回填已有评审人
+    // 草稿态：角色列表加载后自动回填已有评审人 + 应用 Profile 默认值
     useEffect(() => {
       if (editable && roles.length > 0) {
         const sel: Record<string, string> = {}
+        // 先回填已有评审人
         reviewers.forEach((r: any) => { sel[r.role_name] = r.reviewer_uuid || '' })
+        // Profile 快照：single 模式自动填入默认评审人（如果尚未指定）
+        if (profileSnapshot) {
+          for (const role of roles) {
+            if (sel[role.role_name]) continue // 已有指定，不覆盖
+            const snap = profileSnapshot[role.role_name]
+            if (snap && snap.mode === 'single' && snap.default_reviewer_uuid) {
+              sel[role.role_name] = snap.default_reviewer_uuid
+            }
+          }
+        }
         setSelected(sel)
         setReviewerDirty(false)
       }
@@ -1725,6 +1788,18 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
       if (missingRequired.length > 0) {
         alert(`以下角色为必选，请选择评审人：\n${missingRequired.join('、')}`)
         return
+      }
+      // Profile 快照校验：single 角色不可更换默认人选
+      if (profileSnapshot) {
+        for (const role of roles) {
+          const snap = profileSnapshot[role.role_name]
+          if (!snap) continue
+          const currentUuid = (selected[role.role_name] || '').trim()
+          if (snap.mode === 'single' && snap.default_reviewer_uuid && currentUuid && currentUuid !== snap.default_reviewer_uuid) {
+            alert(`角色「${role.role_name}」绑定了指定评审人，不可更换为其他人`)
+            return
+          }
+        }
       }
       const list = Object.entries(selected).filter(([, uid]) => uid.trim()).map(([role, uid]) => ({ role_name: role, reviewer_uuid: uid }))
       setSavingReviewers(true)
@@ -1760,7 +1835,14 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
         {/* 评审人区域 */}
         <div style={{ marginBottom: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <h4 style={S.sectionTitle}>评审人（{reviewers.length}人，已提交 {reviewers.filter((r: any) => r.submitted_at > 0).length}）</h4>
+            <h4 style={S.sectionTitle}>
+              评审人（{reviewers.length}人，已提交 {reviewers.filter((r: any) => r.submitted_at > 0).length}）
+              {data.review?.reviewer_profile_name && (
+                <span style={{ display: 'inline-block', marginLeft: 8, padding: '2px 10px', borderRadius: 4, fontSize: 12, fontWeight: 400, background: '#f0f5ff', color: '#1677ff' }}>
+                  Profile: {data.review.reviewer_profile_name}
+                </span>
+              )}
+            </h4>
           </div>
 
           {editable ? (
@@ -1796,8 +1878,30 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                               {!isPublisher && !role.must_vote && !role.has_veto && <span style={{ color: '#999' }}>-</span>}
                             </td>
                             <td style={S.td}>
-                              <UserPicker value={selected[role.role_name] || ''} displayName={nameMap[selected[role.role_name] || '']} onChange={u => { setSelected({ ...selected, [role.role_name]: u.uuid }); setReviewerDirty(true) }} placeholder={isRequired || isPublisher ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'} />
-                              {isPublisher && !selected[role.role_name] && <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>决议角色必须指定 1 名人员</div>}
+                              {(() => {
+                                const restriction = getRoleRestriction(role.role_name)
+                                return (
+                                  <>
+                                    <UserPicker
+                                      value={selected[role.role_name] || ''}
+                                      displayName={nameMap[selected[role.role_name] || '']}
+                                      onChange={u => { setSelected({ ...selected, [role.role_name]: u.uuid }); setReviewerDirty(true) }}
+                                      placeholder={isRequired || isPublisher ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'}
+                                      allowedUserIds={restriction.allowedUserIds}
+                                    />
+                                    {isPublisher && !selected[role.role_name] && <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>决议角色必须指定 1 名人员</div>}
+                                    {restriction.allowedUserIds && restriction.allowedUserIds.length === 0 && (
+                                      <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>此角色的 Profile 设置了单人模式但未指定默认评审人</div>
+                                    )}
+                                    {profileSnapshot?.[role.role_name]?.mode === 'single' && profileSnapshot[role.role_name].default_reviewer_uuid && (
+                                      <div style={{ fontSize: 11, color: '#1677ff', marginTop: 2 }}>已由 Profile「{data.review?.reviewer_profile_name || ''}」锁定默认人选</div>
+                                    )}
+                                    {profileSnapshot?.[role.role_name]?.mode === 'pool' && (
+                                      <div style={{ fontSize: 11, color: '#1677ff', marginTop: 2 }}>候选池模式 — 仅可从预设候选人中选择</div>
+                                    )}
+                                  </>
+                                )
+                              })()}
                             </td>
                           </tr>
                         )

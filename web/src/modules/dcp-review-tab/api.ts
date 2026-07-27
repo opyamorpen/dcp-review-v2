@@ -150,3 +150,27 @@ export const syncRemediationStatus = (uuid: string, items: any[]) =>
   callApi(`/dcp/review/${uuid}/remediation/sync`, { method: 'POST', body: JSON.stringify({ items }) })
 export const confirmRemediation = (uuid: string, data: { publisher_uuid: string; next_action: 'complete' | 're_review' }) =>
   callApi(`/dcp/review/${uuid}/remediation/confirm`, { method: 'POST', body: JSON.stringify(data) })
+
+// ---- Reviewer Profile ----
+export const listReviewerProfiles = (reviewType?: string) =>
+  callApi(`/dcp/reviewer-profiles${reviewType ? `?review_type=${reviewType}` : ''}`)
+export const createReviewerProfile = (data: { profile_name: string; review_type: string; description?: string; role_assignments: { role_name: string; mode: 'single' | 'pool'; default_reviewer_uuid?: string; candidate_uuids?: string[] }[] }) =>
+  callApi('/dcp/reviewer-profile', { method: 'POST', body: JSON.stringify(data) })
+export const getReviewerProfile = (profileId: string) =>
+  callApi(`/dcp/reviewer-profile/${profileId}`)
+export const updateReviewerProfile = (profileId: string, data: any) =>
+  callApi(`/dcp/reviewer-profile/${profileId}`, { method: 'PUT', body: JSON.stringify(data) })
+export const deleteReviewerProfile = (profileId: string) =>
+  callApi(`/dcp/reviewer-profile/${profileId}`, { method: 'DELETE' })
+
+// ---- Project Binding ----
+export const listProjectBindings = (projectUuid?: string) =>
+  callApi(`/dcp/project-bindings${projectUuid ? `?project_uuid=${projectUuid}` : ''}`)
+export const upsertProjectBinding = (data: { project_uuid: string; profile_id: string; review_type: string }) =>
+  callApi('/dcp/project-binding', { method: 'POST', body: JSON.stringify(data) })
+export const deleteProjectBinding = (bindingId: string) =>
+  callApi(`/dcp/project-binding/${bindingId}`, { method: 'DELETE' })
+
+// ---- Apply Profile to Review ----
+export const applyProfileToReview = (reviewUuid: string, profileId: string) =>
+  callApi(`/dcp/review/${reviewUuid}/apply-profile`, { method: 'POST', body: JSON.stringify({ profile_id: profileId }) })

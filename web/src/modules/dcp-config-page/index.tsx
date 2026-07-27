@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import ReactDOM from 'react-dom'
 import { apiGet, apiPost, DcpApiError, getTeamUUID } from '../../api'
 
-type NavKey = 'phases' | 'materials' | 'indicators' | 'roles' | 'checklist' | 'resolution' | 'notify' | 'ipdflow' | 'recall' | 'remediation'
+type NavKey = 'phases' | 'materials' | 'indicators' | 'roles' | 'checklist' | 'resolution' | 'notify' | 'ipdflow' | 'recall' | 'remediation' | 'profiles'
 
 const NAV: { key: NavKey; label: string }[] = [
  { key: 'phases', label: '节点模板' },
@@ -15,10 +15,20 @@ const NAV: { key: NavKey; label: string }[] = [
  { key: 'notify', label: '通知设置' },
  { key: 'recall', label: '撤回设置' },
  { key: 'remediation', label: '整改设置' },
+ { key: 'profiles', label: '评审人Profile' },
 ]
 
 function jsonArr(s: string): string[] {
  try { const a = JSON.parse(s); return Array.isArray(a) ? a : [] } catch { return [] }
+}
+
+function jsonArrObj(s: string): any[] {
+ try {
+  const a = JSON.parse(s)
+  return Array.isArray(a) ? a.filter((x: any) => x && typeof x === 'object') : []
+ } catch {
+  return []
+ }
 }
 
 // ---- 样式 ----
@@ -63,6 +73,8 @@ const App: React.FC = () => {
  const [resolutionRules, setResolutionRules] = useState<any>({ dcp: null, tr: null })
  const [recallConfig, setRecallConfig] = useState<any>({ enabled: false, allowedBeforeResolution: true, requireReason: true, clearSubmittedOpinions: true })
  const [remediationIssueType, setRemediationIssueType] = useState('任务')
+ const [profiles, setProfiles] = useState<any[]>([])
+ const [projectBindings, setProjectBindings] = useState<any[]>([])
 
  useEffect(() => { loadConfig() }, [])
 
@@ -91,6 +103,8 @@ const App: React.FC = () => {
  if (data.config?.remediation_issue_type) setRemediationIssueType(data.config.remediation_issue_type)
  if (data.ipd_flow_layout) setIpdFlowLayout(data.ipd_flow_layout)
  if (data.resolution_rule_config) setResolutionRules(data.resolution_rule_config)
+ if (data.reviewerProfiles?.length) setProfiles(data.reviewerProfiles)
+ if (data.projectBindings?.length) setProjectBindings(data.projectBindings)
  } catch (err: any) { setMessage('加载失败: ' + err.message) }
  finally { setLoading(false) }
  }
@@ -156,6 +170,7 @@ const App: React.FC = () => {
  {nav === 'notify' && <NotifySettings config={notifyConfig} onChange={setNotifyConfig} editing={editing} />}
  {nav === 'recall' && <RecallSettings config={recallConfig} onChange={setRecallConfig} editing={editing} />}
  {nav === 'remediation' && <RemediationSettings issueType={remediationIssueType} onChange={setRemediationIssueType} editing={editing} />}
+ {nav === 'profiles' && <ReviewerProfilesPanel profiles={profiles.filter((p: any) => (p.review_type || 'dcp') === reviewType)} projectBindings={projectBindings.filter((b: any) => (b.review_type || 'dcp') === reviewType)} roles={roles.filter((r: any) => (r.review_type || 'dcp') === reviewType)} reviewType={reviewType} onRefresh={() => loadConfig()} />}
  </div>
  {editing && (
  <div style={S.saveBar}>
@@ -961,6 +976,495 @@ const ResolutionRuleConfig: React.FC<{ rules: any; roles: any[]; onChange: (v: a
  )}
  </div>
  )
+}
+
+// ============================================================
+// 评审人 Profile / 项目绑定面板
+// ============================================================
+const ReviewerProfilesPanel: React.FC<{
+  profiles: any[]
+  projectBindings: any[]
+  roles: any[]
+  reviewType: string
+  onRefresh: () => void
+}> = ({ profiles, projectBindings, roles, reviewType, onRefresh }) => {
+  type Assignment = { mode: 'single' | 'pool'; default_reviewer_uuid: string; candidate_uuids: string[] }
+  const [editingProfile, setEditingProfile] = useState<any>(null)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [profileForm, setProfileForm] = useState<{ profile_name: string; description: string; assignments: Record<string, Assignment> }>({
+    profile_name: '',
+    description: '',
+    assignments: {},
+  })
+  const [members, setMembers] = useState<{ uuid: string; name: string; email: string }[]>([])
+  const [memberQuery, setMemberQuery] = useState('')
+  const [bindingText, setBindingText] = useState('')
+  const [bindingProfileId, setBindingProfileId] = useState('')
+  const [bindingSaving, setBindingSaving] = useState(false)
+
+  useEffect(() => {
+    const tu = getTeamUUID()
+    if (!tu) return
+    fetch(`/project/api/project/team/${tu}/members?limit=500`, { credentials: 'include' })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const list = data?.members || data?.data || []
+        setMembers((Array.isArray(list) ? list : []).map((u: any) => ({
+          uuid: u.uuid || '',
+          name: u.name || u.email || u.uuid || '',
+          email: u.email || '',
+        })))
+      })
+      .catch(() => {})
+  }, [])
+
+  const memberOptions = memberQuery.trim()
+    ? members.filter(m => m.name.toLowerCase().includes(memberQuery.toLowerCase()) || m.email.toLowerCase().includes(memberQuery.toLowerCase()))
+    : members.slice(0, 50)
+
+  function emptyAssignments(): Record<string, Assignment> {
+    const out: Record<string, Assignment> = {}
+    for (const role of roles) {
+      out[role.role_name] = { mode: role.must_vote || role.has_veto ? 'single' : 'pool', default_reviewer_uuid: '', candidate_uuids: [] }
+    }
+    return out
+  }
+
+  function loadAssignments(profile: any): Record<string, Assignment> {
+    const raw = jsonArrObj(profile.role_assignments_json || profile.reviewers_json || '[]')
+    const out = emptyAssignments()
+    for (const item of raw) {
+      if (!item?.role_name) continue
+      out[item.role_name] = {
+        mode: item.mode === 'pool' ? 'pool' : 'single',
+        default_reviewer_uuid: item.default_reviewer_uuid || item.default_reviewer || item.reviewer_uuid || '',
+        candidate_uuids: Array.isArray(item.candidate_uuids) ? item.candidate_uuids.filter(Boolean) : (item.candidate_uuids_json ? jsonArr(item.candidate_uuids_json) : []),
+      }
+    }
+    return out
+  }
+
+  function startCreate() {
+    setProfileForm({ profile_name: '', description: '', assignments: emptyAssignments() })
+    setEditingProfile({ _key: 'new' })
+    setMsg('')
+  }
+
+  function startEdit(profile: any) {
+    setProfileForm({
+      profile_name: profile.profile_name || '',
+      description: profile.description || '',
+      assignments: loadAssignments(profile),
+    })
+    setEditingProfile(profile)
+    setMsg('')
+  }
+
+  function updateAssignment(roleName: string, patch: Partial<Assignment>) {
+    setProfileForm(prev => ({
+      ...prev,
+      assignments: {
+        ...prev.assignments,
+        [roleName]: { ...prev.assignments[roleName], ...patch },
+      },
+    }))
+  }
+
+  function toggleCandidate(roleName: string, uuid: string) {
+    const cur = profileForm.assignments[roleName]?.candidate_uuids || []
+    const next = cur.includes(uuid) ? cur.filter(v => v !== uuid) : [...cur, uuid]
+    updateAssignment(roleName, { candidate_uuids: next })
+  }
+
+  async function handleSaveProfile() {
+    if (!profileForm.profile_name.trim()) {
+      setMsg('请输入 Profile 名称')
+      return
+    }
+    setSaving(true)
+    setMsg('')
+    try {
+      const tu = getTeamUUID()
+      const role_assignments = roles.map((role: any) => {
+        const a = profileForm.assignments[role.role_name] || { mode: 'single', default_reviewer_uuid: '', candidate_uuids: [] }
+        return {
+          role_name: role.role_name,
+          mode: a.mode,
+          default_reviewer_uuid: a.mode === 'single' ? a.default_reviewer_uuid : '',
+          candidate_uuids: a.mode === 'pool' ? a.candidate_uuids : [],
+        }
+      })
+      const body = {
+        profile_name: profileForm.profile_name.trim(),
+        review_type: reviewType,
+        description: profileForm.description.trim(),
+        role_assignments,
+      }
+      const url = editingProfile._key === 'new'
+        ? `/project/api/project/team/${tu}/dcp/reviewer-profile`
+        : `/project/api/project/team/${tu}/dcp/reviewer-profile/${editingProfile._key}`
+      const method = editingProfile._key === 'new' ? 'POST' : 'PUT'
+      const res = await fetch(url, {
+        method,
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'Ones-Plugin-Id': '709xehle' },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json()
+      const ret = data.body || data
+      if (ret.error) {
+        setMsg('保存失败: ' + ret.error)
+        return
+      }
+      setEditingProfile(null)
+      onRefresh()
+      setMsg('Profile 已保存')
+    } catch (err: any) {
+      setMsg('保存失败: ' + (err?.message || err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleDelete(pid: string) {
+    if (!confirm('确定删除此 Profile？')) return
+    try {
+      const tu = getTeamUUID()
+      const res = await fetch(`/project/api/project/team/${tu}/dcp/reviewer-profile/${pid}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: { 'Ones-Plugin-Id': '709xehle' },
+      })
+      const data = await res.json()
+      const body = data.body || data
+      if (body.error) {
+        setMsg('删除失败: ' + body.error)
+        return
+      }
+      setEditingProfile(null)
+      onRefresh()
+      setMsg('Profile 已删除')
+    } catch (err: any) {
+      setMsg('删除失败: ' + (err?.message || err))
+    }
+  }
+
+  async function handleSaveBindings() {
+    if (!bindingProfileId) {
+      setMsg('请选择要绑定的 Profile')
+      return
+    }
+    const refs = bindingText.split(/\n|,|，/).map(s => s.trim()).filter(Boolean)
+    if (refs.length === 0) {
+      setMsg('请输入至少一个项目编号或 UUID')
+      return
+    }
+    setBindingSaving(true)
+    setMsg('')
+    try {
+      const tu = getTeamUUID()
+      for (const ref of refs) {
+        let projectUUID = ref
+        try {
+          const exchRes = await fetch(`/project/api/ones-project/team/${tu}/projects/exchange/${encodeURIComponent(ref)}`, { credentials: 'include' })
+          if (exchRes.ok) {
+            const exch = await exchRes.json()
+            projectUUID = exch?.data?.project_uuid || exch?.project_uuid || projectUUID
+          }
+        } catch {}
+        const res = await fetch(`/project/api/project/team/${tu}/dcp/project-binding`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json', 'Ones-Plugin-Id': '709xehle' },
+          body: JSON.stringify({ project_uuid: projectUUID, profile_id: bindingProfileId, review_type: reviewType }),
+        })
+        const data = await res.json()
+        const body = data.body || data
+        if (body.error) throw new Error(body.error)
+      }
+      setBindingText('')
+      onRefresh()
+      setMsg('项目绑定已保存')
+    } catch (err: any) {
+      setMsg('绑定失败: ' + (err?.message || err))
+    } finally {
+      setBindingSaving(false)
+    }
+  }
+
+  async function handleDeleteBinding(bindingId: string) {
+    const tu = getTeamUUID()
+    const res = await fetch(`/project/api/project/team/${tu}/dcp/project-binding/${bindingId}`, {
+      method: 'DELETE',
+      credentials: 'include',
+      headers: { 'Ones-Plugin-Id': '709xehle' },
+    })
+    const data = await res.json()
+    const body = data.body || data
+    if (body.error) {
+      setMsg('删除绑定失败: ' + body.error)
+      return
+    }
+    onRefresh()
+    setMsg('绑定已删除')
+  }
+
+  if (!editingProfile) {
+    return (
+      <div>
+        <div style={S.sectionTitle}>
+          <span>评审人 Profile（{reviewType === 'dcp' ? 'DCP' : 'TR'}）</span>
+          <button style={S.addBtn} onClick={startCreate}>+ 新建 Profile</button>
+        </div>
+        {msg && <div style={{ padding: '8px 12px', borderRadius: 4, fontSize: 12, marginBottom: 12, background: msg.includes('失败') ? '#fff2f0' : '#f6ffed', color: msg.includes('失败') ? '#cf1322' : '#52c41a' }}>{msg}</div>}
+        {profiles.length === 0 ? (
+          <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>
+            暂无评审人 Profile。Profile 负责给每个角色定义默认值或候选范围。
+          </div>
+        ) : (
+          <table style={S.table}>
+            <thead><tr>
+              <th style={S.th}>名称</th>
+              <th style={S.th}>描述</th>
+              <th style={S.th}>角色分配</th>
+              <th style={S.th}>更新日期</th>
+              <th style={{ ...S.th, width: 120 }}>操作</th>
+            </tr></thead>
+            <tbody>
+              {profiles.map((p: any) => {
+                const assigns = jsonArrObj(p.role_assignments_json || p.reviewers_json || '[]')
+                return (
+                  <tr key={p._key}>
+                    <td style={S.td}><strong>{p.profile_name}</strong></td>
+                    <td style={S.td}>{p.description || '-'}</td>
+                    <td style={S.td}>{assigns.length} 个角色</td>
+                    <td style={S.td}>{p.updated_at ? new Date(p.updated_at).toLocaleDateString('zh-CN') : '-'}</td>
+                    <td style={S.td}>
+                      <button style={{ ...S.addBtn, marginRight: 8 }} onClick={() => startEdit(p)}>编辑</button>
+                      <button style={S.delBtn} onClick={() => handleDelete(p._key)}>删除</button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+
+        <div style={{ marginTop: 28 }}>
+          <div style={S.sectionTitle}>
+            <span>项目绑定</span>
+          </div>
+          <div style={{ color: '#999', fontSize: 12, marginBottom: 12 }}>输入项目编号或 UUID，一行一个，保存后会绑定到同一个 Profile。</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr auto', gap: 8, marginBottom: 12 }}>
+            <textarea style={{ ...S.textarea, minHeight: 90 }} value={bindingText} onChange={e => setBindingText(e.target.value)} placeholder="项目编号或 UUID，一行一个" />
+            <select style={{ ...S.select, alignSelf: 'start' }} value={bindingProfileId} onChange={e => setBindingProfileId(e.target.value)}>
+              <option value="">选择 Profile</option>
+              {profiles.map((p: any) => <option key={p._key} value={p._key}>{p.profile_name}</option>)}
+            </select>
+            <button style={S.btn(true, bindingSaving)} disabled={bindingSaving} onClick={handleSaveBindings}>{bindingSaving ? '保存中…' : '保存绑定'}</button>
+          </div>
+          {projectBindings.length === 0 ? (
+            <div style={{ color: '#999', padding: 12, textAlign: 'center', background: '#fafafa', borderRadius: 6 }}>暂无项目绑定</div>
+          ) : (
+            <table style={S.table}>
+              <thead><tr>
+                <th style={S.th}>项目</th>
+                <th style={S.th}>Profile</th>
+                <th style={S.th}>类型</th>
+                <th style={{ ...S.th, width: 90 }}>操作</th>
+              </tr></thead>
+              <tbody>
+                {projectBindings.map((b: any) => (
+                  <tr key={b._key}>
+                    <td style={S.td}>{b.project_name || b.project_identifier || b.project_uuid}</td>
+                    <td style={S.td}>{b.profile_name || b.profile_id}</td>
+                    <td style={S.td}>{(b.review_type || 'dcp').toUpperCase()}</td>
+                    <td style={S.td}><button style={S.delBtn} onClick={() => handleDeleteBinding(b._key)}>删除</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <div style={S.sectionTitle}>
+        <span>{editingProfile._key === 'new' ? '新建 Profile' : `编辑 Profile: ${editingProfile.profile_name}`}</span>
+        <button style={S.btn(false)} onClick={() => setEditingProfile(null)}>返回列表</button>
+      </div>
+      {msg && <div style={{ padding: '8px 12px', borderRadius: 4, fontSize: 12, marginBottom: 12, background: msg.includes('失败') ? '#fff2f0' : '#f6ffed', color: msg.includes('失败') ? '#cf1322' : '#52c41a' }}>{msg}</div>}
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ display: 'block', marginBottom: 4, fontWeight: 500 }}>Profile 名称 *</label>
+        <input style={S.input} value={profileForm.profile_name} onChange={e => setProfileForm({ ...profileForm, profile_name: e.target.value })} placeholder="如：DCP 标准评审团" />
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ display: 'block', marginBottom: 4, fontWeight: 500 }}>描述</label>
+        <input style={S.input} value={profileForm.description} onChange={e => setProfileForm({ ...profileForm, description: e.target.value })} placeholder="可选描述" />
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ display: 'block', marginBottom: 4, fontWeight: 500 }}>角色分配</label>
+        <table style={S.table}>
+          <thead><tr>
+            <th style={S.th}>角色</th>
+            <th style={S.th}>模式</th>
+            <th style={S.th}>默认值 / 候选池</th>
+          </tr></thead>
+          <tbody>
+            {roles.map((role: any) => {
+              const ass = profileForm.assignments[role.role_name] || { mode: 'single', default_reviewer_uuid: '', candidate_uuids: [] }
+              const isSingle = ass.mode !== 'pool'
+              return (
+                <tr key={role.role_name}>
+                  <td style={S.td}>
+                    {role.role_name}
+                    {role.must_vote && <span style={{ display: 'inline-block', marginLeft: 8, padding: '1px 6px', borderRadius: 3, fontSize: 11, background: '#fff7e6', color: '#faad14' }}>必投</span>}
+                    {role.has_veto && <span style={{ display: 'inline-block', marginLeft: 4, padding: '1px 6px', borderRadius: 3, fontSize: 11, background: '#fff1f0', color: '#ff4d4f' }}>否决</span>}
+                  </td>
+                  <td style={S.td}>
+                    <select style={S.select} value={ass.mode} onChange={e => updateAssignment(role.role_name, { mode: e.target.value as 'single' | 'pool' })}>
+                      <option value="single">单人默认</option>
+                      <option value="pool">候选池</option>
+                    </select>
+                  </td>
+                  <td style={S.td}>
+                    {isSingle ? (
+                      <UserPicker
+                        members={members}
+                        value={ass.default_reviewer_uuid}
+                        displayName={members.find(m => m.uuid === ass.default_reviewer_uuid)?.name}
+                        onChange={u => updateAssignment(role.role_name, { default_reviewer_uuid: u.uuid })}
+                        placeholder="搜索默认评审人…"
+                        allowedUserIds={members.map(m => m.uuid)}
+                      />
+                    ) : (
+                      <CandidatePoolPicker
+                        selected={ass.candidate_uuids}
+                        members={members}
+                        query={memberQuery}
+                        onQueryChange={setMemberQuery}
+                        onToggle={uid => toggleCandidate(role.role_name, uid)}
+                      />
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: 'flex', gap: 12 }}>
+        <button style={S.btn(true, saving)} disabled={saving} onClick={handleSaveProfile}>{saving ? '保存中…' : '保存 Profile'}</button>
+        <button style={S.btn(false)} onClick={() => setEditingProfile(null)}>取消</button>
+      </div>
+    </div>
+  )
+}
+
+const CandidatePoolPicker: React.FC<{
+  selected: string[]
+  members: { uuid: string; name: string; email: string }[]
+  query: string
+  onQueryChange: (v: string) => void
+  onToggle: (uid: string) => void
+}> = ({ selected, members, query, onQueryChange, onToggle }) => {
+  const filtered = query.trim()
+    ? members.filter(m => m.name.toLowerCase().includes(query.toLowerCase()) || m.email.toLowerCase().includes(query.toLowerCase()))
+    : members.slice(0, 20)
+  return (
+    <div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+        {selected.length === 0 ? <span style={{ color: '#999', fontSize: 12 }}>尚未选择候选人</span> : selected.map(uid => {
+          const m = members.find(x => x.uuid === uid)
+          return (
+            <span key={uid} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, background: '#e6f4ff', color: '#1677ff', fontSize: 12 }}>
+              {m?.name || uid}
+              <button type="button" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#1677ff' }} onClick={() => onToggle(uid)}>×</button>
+            </span>
+          )
+        })}
+      </div>
+      <input style={S.input} value={query} onChange={e => onQueryChange(e.target.value)} placeholder="搜索成员后点击加入候选池…" />
+      <div style={{ maxHeight: 160, overflow: 'auto', border: '1px solid #e8e8e8', borderRadius: 4, marginTop: 6 }}>
+        {filtered.length === 0 ? <div style={{ padding: 8, color: '#999' }}>无匹配成员</div> : filtered.map(m => (
+          <div key={m.uuid} onClick={() => onToggle(m.uuid)} style={{ padding: '6px 10px', cursor: 'pointer', background: selected.includes(m.uuid) ? '#f0f5ff' : '#fff', borderBottom: '1px solid #f5f5f5' }}>
+            {m.name} <span style={{ color: '#999', fontSize: 11 }}>{m.email || m.uuid}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const UserPicker: React.FC<{
+  value: string
+  onChange: (user: { uuid: string; name: string }) => void
+  placeholder?: string
+  displayName?: string
+  allowedUserIds?: string[]
+  members: { uuid: string; name: string; email: string }[]
+}> = ({ value, onChange, placeholder = '搜索用户姓名或邮箱…', displayName, allowedUserIds, members }) => {
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const allowedSet = React.useMemo(() => allowedUserIds && allowedUserIds.length > 0 ? new Set(allowedUserIds) : null, [allowedUserIds])
+  const filtered = React.useMemo(() => {
+    const base = allowedSet ? members.filter(m => allowedSet.has(m.uuid)) : members
+    if (!query.trim()) return base.slice(0, 30)
+    const kw = query.trim().toLowerCase()
+    return base.filter(m => m.name.toLowerCase().includes(kw) || m.email.toLowerCase().includes(kw) || m.uuid.toLowerCase().includes(kw)).slice(0, 30)
+  }, [allowedSet, members, query])
+  const shownName = value ? (displayName || members.find(m => m.uuid === value)?.name || '') : ''
+
+  if (shownName) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, background: '#e6f4ff', padding: '2px 10px', borderRadius: 4 }}>
+          {shownName}
+        </span>
+        <button
+          onClick={() => onChange({ uuid: '', name: '' })}
+          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#ff4d4f', fontSize: 16, padding: 0, lineHeight: 1 }}
+          title="清除"
+        >×</button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        style={S.input}
+        value={query}
+        onChange={e => { setQuery(e.target.value); setOpen(true) }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder={placeholder}
+      />
+      {open && filtered.length > 0 && (
+        <div style={{ position: 'absolute', zIndex: 20, left: 0, right: 0, maxHeight: 220, overflow: 'auto', background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4, marginTop: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
+          {filtered.map(m => (
+            <div
+              key={m.uuid}
+              onMouseDown={e => {
+                e.preventDefault()
+                onChange({ uuid: m.uuid, name: m.name })
+                setQuery('')
+                setOpen(false)
+              }}
+              style={{ padding: '8px 10px', cursor: 'pointer', borderBottom: '1px solid #f5f5f5' }}
+            >
+              <div style={{ fontWeight: 500 }}>{m.name}</div>
+              <div style={{ fontSize: 11, color: '#999' }}>{m.email || m.uuid}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 ReactDOM.render(<App />, document.getElementById('ones-mf-root'))

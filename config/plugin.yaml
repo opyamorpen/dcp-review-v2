@@ -2,7 +2,7 @@ service:
   app_id: 709xehle
   name: DCP评审中心
   description: 团队级DCP/TR评审插件。支持项目内发起DCP阶段决策评审和TR技术评审、多人异步评审、关联工作项、不可覆盖决议快照和审计追溯。
-  version: 1.31.9
+  version: 1.31.10
   mode: org
   logo: null
   language: nodejs
@@ -319,6 +319,51 @@ apis:
       - GET
     url: /team/:teamUUID/dcp/stats
     function: getDcpStats
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/reviewer-profiles
+    function: listReviewerProfiles
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/reviewer-profile
+    function: createReviewerProfile
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/reviewer-profile/:profile_id
+    function: getReviewerProfile
+  - type: external
+    methods:
+      - PUT
+    url: /team/:teamUUID/dcp/reviewer-profile/:profile_id
+    function: updateReviewerProfile
+  - type: external
+    methods:
+      - DELETE
+    url: /team/:teamUUID/dcp/reviewer-profile/:profile_id
+    function: deleteReviewerProfile
+  - type: external
+    methods:
+      - GET
+    url: /team/:teamUUID/dcp/project-bindings
+    function: listProjectBindings
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/project-binding
+    function: upsertProjectBinding
+  - type: external
+    methods:
+      - DELETE
+    url: /team/:teamUUID/dcp/project-binding/:binding_id
+    function: deleteProjectBinding
+  - type: external
+    methods:
+      - POST
+    url: /team/:teamUUID/dcp/review/:review_uuid/apply-profile
+    function: applyProfileToReview
 events:
   - eventType: ones:project:issue-status:changed
     function: onIssueStatusChanged
@@ -485,6 +530,26 @@ storage:
           type: text
           length: 32
           default: ''
+        reviewer_profile_id:
+          type: text
+          length: 64
+          default: ''
+        reviewer_profile_name:
+          type: text
+          length: 128
+          default: ''
+        reviewer_profile_snapshot_json:
+          type: text
+          length: 65535
+          default: ''
+        reviewer_binding_snapshot_json:
+          type: text
+          length: 65535
+          default: ''
+        reviewer_role_assignments_snapshot_json:
+          type: text
+          length: 65535
+          default: '[]'
         reviewers_json:
           type: text
           length: 32768
@@ -530,6 +595,14 @@ storage:
           length: 65535
           default: '[]'
         checklist_templates_json:
+          type: text
+          length: 65535
+          default: '[]'
+        bound_profile_id:
+          type: text
+          length: 64
+          default: ''
+        profile_snapshot_json:
           type: text
           length: 65535
           default: '[]'
@@ -663,6 +736,18 @@ storage:
           type: text
           length: 64
           default: ''
+        selection_mode:
+          type: text
+          length: 16
+          default: ''
+        default_reviewer_uuid:
+          type: text
+          length: 64
+          default: ''
+        candidate_uuids_json:
+          type: text
+          length: 32768
+          default: '[]'
         conclusion:
           type: text
           length: 32
@@ -904,6 +989,58 @@ storage:
           length: 64
           default: ''
         checked_at:
+          type: integer
+          length: 16
+          default: 0
+    - name: dcp_reviewer_profile
+      attributes:
+        profile_name:
+          type: text
+          length: 128
+          default: ''
+        review_type:
+          type: text
+          length: 8
+          default: dcp
+        description:
+          type: text
+          length: 512
+          default: ''
+        role_assignments_json:
+          type: text
+          length: 65535
+          default: '[]'
+        created_by:
+          type: text
+          length: 64
+          default: ''
+        created_at:
+          type: integer
+          length: 16
+          default: 0
+        updated_at:
+          type: integer
+          length: 16
+          default: 0
+    - name: dcp_project_binding
+      attributes:
+        project_uuid:
+          type: text
+          length: 64
+          default: ''
+        profile_id:
+          type: text
+          length: 64
+          default: ''
+        review_type:
+          type: text
+          length: 8
+          default: dcp
+        created_by:
+          type: text
+          length: 64
+          default: ''
+        created_at:
           type: integer
           length: 16
           default: 0
