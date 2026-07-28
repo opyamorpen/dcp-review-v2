@@ -259,6 +259,19 @@ export class DcpApiError extends Error {
   }
 }
 
+async function readApiError(res: Response): Promise<string> {
+  const text = await res.text().catch(() => '')
+  try {
+    const json = JSON.parse(text)
+    const payload = json.body || json.data || json
+    if (payload?.error) return payload.error
+  } catch { /* 非 JSON 响应使用状态码 */ }
+  if (res.status === 401) return '登录状态已失效，请重新登录后再试。'
+  if (res.status === 403) return '没有执行此操作的权限。'
+  if (res.status === 503) return '权限服务暂时不可用，请稍后重试。'
+  return text.substring(0, 500) || `HTTP ${res.status}`
+}
+
 function buildUrl(endpoint: string): string {
   const tu = getTeamUUID()
   if (!tu) {
@@ -279,8 +292,7 @@ export async function apiGet(endpoint: string): Promise<any> {
     headers: { 'Ones-Plugin-Id': getApiAppID() },
   })
   if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new DcpApiError(`HTTP ${res.status} ${text.substring(0, 500)}`, res.status)
+    throw new DcpApiError(await readApiError(res), res.status)
   }
   const json = await res.json()
   // external API 响应包裹在 data 中，backend 返回包裹在 body 中
@@ -296,8 +308,7 @@ export async function apiPost(endpoint: string, body: any): Promise<any> {
     body: JSON.stringify(body),
   })
   if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new DcpApiError(`HTTP ${res.status} ${text.substring(0, 500)}`, res.status)
+    throw new DcpApiError(await readApiError(res), res.status)
   }
   const json = await res.json()
   // external API 响应包裹在 data 中，backend 返回包裹在 body 中

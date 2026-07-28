@@ -2,7 +2,7 @@ service:
   app_id: 709xehle
   name: DCP评审中心
   description: 团队级DCP/TR评审插件。支持项目内发起DCP阶段决策评审和TR技术评审、多人异步评审、关联工作项、不可覆盖决议快照和审计追溯。
-  version: 1.31.27
+  version: 1.31.32
   mode: org
   logo: null
   language: nodejs
@@ -103,267 +103,257 @@ apis:
     methods:
       - GET
     url: /team/:teamUUID/dcp/config
-    function: getDcpConfig
+    function: apiGetDcpConfig
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/config
-    function: savePluginConfig
+    function: apiSavePluginConfig
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review
-    function: createReview
+    function: apiCreateReview
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid
-    function: getReviewDetail
+    function: apiGetReviewDetail
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/reviews/by-project/:project_uuid
-    function: listReviewsByProject
+    function: apiListReviewsByProject
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/reviews
-    function: getDcpReviews
+    function: apiGetDcpReviews
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/reviews/my
-    function: listMyReviews
+    function: apiListMyReviews
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/reviews/team
-    function: listTeamReviews
+    function: apiListTeamReviews
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/start
-    function: startReview
+    function: apiStartReview
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/recall
-    function: recallReview
+    function: apiRecallReview
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/basic-info
-    function: updateReviewBasicInfo
+    function: apiUpdateReviewBasicInfo
   - type: external
     methods:
       - DELETE
     url: /team/:teamUUID/dcp/review/:review_uuid
-    function: deleteReview
+    function: apiDeleteReview
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/recreate
-    function: recreateReview
+    function: apiRecreateReview
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/material-status
-    function: updateMaterialStatus
+    function: apiUpdateMaterialStatus
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/material-upload
-    function: uploadMaterialFile
+    function: apiUploadMaterialFile
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/material-remove
-    function: removeMaterialFile
+    function: apiRemoveMaterialFile
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid/material/:template_id/upload-url
-    function: getMaterialUploadUrl
+    function: apiGetMaterialUploadUrl
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid/material/:template_id/download-url
-    function: getMaterialDownloadUrl
+    function: apiGetMaterialDownloadUrl
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid/material/:template_id/preview
-    function: getMaterialPreview
+    function: apiGetMaterialPreview
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid/material-attachment/download-url
-    function: getAttachmentDownloadUrl
+    function: apiGetAttachmentDownloadUrl
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid/material-attachment/preview
-    function: getAttachmentPreview
+    function: apiGetAttachmentPreview
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/indicators
-    function: updateIndicators
+    function: apiUpdateIndicators
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/reviewers
-    function: updateReviewers
+    function: apiUpdateReviewers
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/opinion
-    function: submitOpinion
+    function: apiSubmitOpinion
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/link-issue
-    function: linkIssue
+    function: apiLinkIssue
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid/linked-issues
-    function: getLinkedIssues
+    function: apiGetLinkedIssues
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/create-issue
-    function: createIssue
+    function: apiCreateIssue
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/project/:project_uuid/issue-types
-    function: listIssueTypes
+    function: apiListIssueTypes
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/generate-resolution
-    function: generateResolution
+    function: apiGenerateResolution
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/publish-resolution
-    function: publishResolution
+    function: apiPublishResolution
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/supplement
-    function: addSupplement
+    function: apiAddSupplement
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid/audit-log
-    function: getAuditLog
+    function: apiGetAuditLog
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/checklist
-    function: checkChecklist
+    function: apiCheckChecklist
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/remind
-    function: remindReview
-  - type: external
-    methods:
-      - GET
-    url: /team/:teamUUID/dcp/debug/reviewer-storage/:review_uuid
-    function: debugReviewerStorage
-  - type: external
-    methods:
-      - GET
-    url: /team/:teamUUID/dcp/debug/my-reviews
-    function: debugMyReviews
+    function: apiRemindReview
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/transition
-    function: transitionReview
+    function: apiTransitionReview
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid/state
-    function: getReviewState
+    function: apiGetReviewState
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid/rounds
-    function: getReviewRounds
+    function: apiGetReviewRounds
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/review/:review_uuid/remediation
-    function: getRemediationIssues
+    function: apiGetRemediationIssues
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/remediation/refresh
-    function: refreshRemediationStatus
+    function: apiRefreshRemediationStatus
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/remediation/sync
-    function: syncRemediationStatus
+    function: apiSyncRemediationStatus
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/remediation/confirm
-    function: confirmRemediation
+    function: apiConfirmRemediation
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/stats
-    function: getDcpStats
+    function: apiGetDcpStats
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/reviewer-profiles
-    function: listReviewerProfiles
+    function: apiListReviewerProfiles
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/reviewer-profile
-    function: createReviewerProfile
+    function: apiCreateReviewerProfile
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/reviewer-profile/:profile_id
-    function: getReviewerProfile
+    function: apiGetReviewerProfile
   - type: external
     methods:
       - PUT
     url: /team/:teamUUID/dcp/reviewer-profile/:profile_id
-    function: updateReviewerProfile
+    function: apiUpdateReviewerProfile
   - type: external
     methods:
       - DELETE
     url: /team/:teamUUID/dcp/reviewer-profile/:profile_id
-    function: deleteReviewerProfile
+    function: apiDeleteReviewerProfile
   - type: external
     methods:
       - GET
     url: /team/:teamUUID/dcp/project-bindings
-    function: listProjectBindings
+    function: apiListProjectBindings
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/project-binding
-    function: upsertProjectBinding
+    function: apiUpsertProjectBinding
   - type: external
     methods:
       - DELETE
     url: /team/:teamUUID/dcp/project-binding/:binding_id
-    function: deleteProjectBinding
+    function: apiDeleteProjectBinding
   - type: external
     methods:
       - POST
     url: /team/:teamUUID/dcp/review/:review_uuid/apply-profile
-    function: applyProfileToReview
+    function: apiApplyProfileToReview
 events:
   - eventType: ones:project:issue-status:changed
     function: onIssueStatusChanged

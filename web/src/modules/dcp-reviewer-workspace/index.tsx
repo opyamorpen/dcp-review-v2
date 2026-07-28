@@ -217,7 +217,7 @@ const App: React.FC = () => {
  meUuid = me.uuid || ''
  }
  if (meUuid) {
- const data = await callApi(`/dcp/reviews/my?reviewer_uuid=${encodeURIComponent(meUuid)}`)
+ const data = await callApi('/dcp/reviews/my')
  const allReviews = [...(data.review_pending || data.pending || []), ...(data.resolution_pending || []), ...(data.done || [])]
  const projectNameMap = await resolveProjectNames(allReviews)
  const enrich = (arr: any[]) => arr.map(r => ({ ...r, project_name: projectNameMap[r.project_uuid] || r.project_name || r.project_uuid }))

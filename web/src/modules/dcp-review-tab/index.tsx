@@ -122,7 +122,7 @@ const App: React.FC = () => {
   const [ipdFlowLayout, setIpdFlowLayout] = useState<any>(null)
   const [allReviews, setAllReviews] = useState<any[]>([])
   const [currentUser, setCurrentUser] = useState<{ uuid: string; name: string }>({ uuid: '', name: '' })
-  const [hasCreatePerm, setHasCreatePerm] = useState(true) // 新建权限，默认 true 避免闪烁
+  const [hasCreatePerm, setHasCreatePerm] = useState(false)
   const [copyToast, setCopyToast] = useState('')
 
   const [page, setPage] = useState(1)

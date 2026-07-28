@@ -85,7 +85,11 @@ const App: React.FC = () => {
  async function loadConfig() {
  setLoading(true)
  try {
- const data = await apiGet('/dcp/config')
+ const [data, profileData, bindingData] = await Promise.all([
+ apiGet('/dcp/config'),
+ apiGet('/dcp/reviewer-profiles'),
+ apiGet('/dcp/project-bindings'),
+ ])
  // 后端 getPluginConfig 返回 { config, phases, materials, indicators, roles }
  // 兼容旧数据：拆分逗号分隔的 resolution_options，默认 dependencies
  const normPhase = (p: any) => {
@@ -107,8 +111,8 @@ const App: React.FC = () => {
  if (data.config?.remediation_issue_type) setRemediationIssueType(data.config.remediation_issue_type)
  if (data.ipd_flow_layout) setIpdFlowLayout(data.ipd_flow_layout)
  if (data.resolution_rule_config) setResolutionRules(data.resolution_rule_config)
- if (data.reviewerProfiles?.length) setProfiles(data.reviewerProfiles)
- if (data.projectBindings?.length) setProjectBindings(data.projectBindings)
+ setProfiles(profileData.profiles || [])
+ setProjectBindings(bindingData.bindings || [])
  } catch (err: any) { setMessage('加载失败: ' + err.message) }
  finally { setLoading(false) }
  }
