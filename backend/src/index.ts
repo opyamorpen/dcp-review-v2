@@ -7,7 +7,7 @@
 // ============================================================
 import { Logger } from '@ones-op/node-logger'
 import { storage } from '@ones-op/sdk/node'
-import type { PluginResponse } from '@ones-op/node-types'
+import { PluginResponse } from '@ones-op/node-types'
 import { OPFetch, getOpenApiToken } from '@ones-op/fetch'
 import { Notify, NotifyWay } from '@ones-op/node-ability'
 
@@ -33,6 +33,8 @@ const supplement = storage.entity('dcp_supplement')
 const auditLog = storage.entity('dcp_audit_log')
 const checkItem = storage.entity('dcp_checklist_item')
 const checkResult = storage.entity('dcp_checklist_result')
+const reviewerProfile = storage.entity('dcp_reviewer_profile')
+const projectBinding = storage.entity('dcp_project_binding')
 
 const ALL_ENTITIES = [matItem, indData, rvReviewer, linkedIssue, resolution, supplement, auditLog]
 
@@ -952,6 +954,8 @@ export async function getPluginConfig(_req: any): Promise<PluginResponse> {
     indicators: withType(await qAll(indTpl)),
     roles: withType(await qAll(roleTpl)),
     checklistItems: withType(await qAll(checkItem)),
+    reviewerProfiles: await qAll(reviewerProfile),
+    projectBindings: await qAll(projectBinding),
   }}
 }
 
@@ -1037,10 +1041,12 @@ export async function createReview(req: any): Promise<PluginResponse> {
   const rvUuid = makeUuid()
   const now = Date.now()
   const reviewType = review_type || 'dcp'
+  const projectAliases = Array.isArray(b.project_aliases) ? b.project_aliases.filter(Boolean).map(String) : []
+  const projectLookupIds = new Set([project_uuid, ...projectAliases])
 
   // 校验：同项目同阶段同类型已有决议通过（pass / conditional_pass）的评审单时，禁止重复发起
   const existingRvs = await qAll(review, (v: any) =>
-    v.project_uuid === project_uuid &&
+    projectLookupIds.has(v.project_uuid) &&
     v.phase_code === phase_code &&
     (v.review_type || 'dcp') === reviewType &&
     v.status === 'completed'
@@ -1148,7 +1154,69 @@ export async function createReview(req: any): Promise<PluginResponse> {
   }
   await writeAudit(rvUuid, creator_uuid || '', '创建评审', rvUuid,
     `创建${reviewType === 'tr' ? 'TR' : 'DCP'}评审单: ${reviewNumber} - ${phase_code} - ${review_title || 'DCP评审'}`)
-  return { body: { review_uuid: rvUuid, review_number: reviewNumber, materials_count: mats.length, indicators_count: inds.length } }
+
+  // 自动解析项目绑定 → 冻结 Reviewer Profile 快照，并为 single 模式预填默认评审人
+  let autoAppliedProfile = ''
+  let autoAppliedCount = 0
+  try {
+    const bindings = await qAll(projectBinding, (v: any) =>
+      v.project_uuid === project_uuid && (v.review_type || 'dcp') === reviewType)
+    if (bindings.length > 0) {
+      const binding = bindings[0]
+      const profile = await reviewerProfile.get(binding.profile_id)
+      if (profile) {
+        const roleTemplates = filterRolesByType(await qAll(roleTpl), reviewType)
+        const assignments = normalizeRoleAssignments(jsonArr((profile as any).role_assignments_json || (profile as any).reviewers_json || '[]'))
+        const snapshotReviewers = resolveAutoReviewers(assignments, roleTemplates)
+        const savedPayload = await writeReviewersToEntities(rvUuid, snapshotReviewers, roleTemplates, review)
+        const roleAssignmentsSnapshot = JSON.stringify(assignments)
+        const profileSnapshot = JSON.stringify({
+          profile_id: binding.profile_id,
+          profile_name: (profile as any).profile_name || '',
+          review_type: reviewType,
+          role_assignments: assignments,
+        })
+        await review.set(rvUuid, cleanForSet({
+          review_uuid: rvUuid, project_uuid, phase_code,
+          review_title: review_title || 'DCP评审', meeting_time: meeting_time || 0,
+          status: 'draft', review_state: 'draft', round_no: 1, round_state: 'draft',
+          creator_uuid: creator_uuid || '', created_at: now, updated_at: now,
+          review_number: reviewNumber, review_type: reviewType,
+          resolution_rule_json: frozenRuleJson,
+          config_frozen_at: now, config_version_note: '按创建时配置执行',
+          role_templates_json: roleTemplatesJson, checklist_templates_json: checklistTemplatesJson,
+          reviewers_json: JSON.stringify(savedPayload),
+          reviewer_profile_id: binding.profile_id,
+          reviewer_profile_name: (profile as any).profile_name || '',
+          reviewer_profile_snapshot_json: profileSnapshot,
+          reviewer_binding_snapshot_json: JSON.stringify(binding),
+          reviewer_role_assignments_snapshot_json: roleAssignmentsSnapshot,
+          state_history_json: JSON.stringify([{
+            state: 'draft', at: now, by: creator_uuid || 'system',
+            reason: '创建评审单', round_no: 1, from_state: '',
+          }]),
+        }))
+        autoAppliedProfile = (profile as any).profile_name || binding.profile_id
+        autoAppliedCount = savedPayload.filter((r: any) => r.reviewer_uuid).length
+        await writeAudit(rvUuid, creator_uuid || '', '自动应用Profile', rvUuid,
+          `从项目绑定自动应用评审人Profile「${autoAppliedProfile}」，共 ${savedPayload.length} 个角色快照`)
+      }
+    }
+  } catch (e: any) {
+    Logger.info(`[DCP] auto-apply profile failed for ${rvUuid}: ${e?.message || e}`)
+  }
+
+  return { body: {
+    review_uuid: rvUuid,
+    review_number: reviewNumber,
+    materials_count: mats.length,
+    indicators_count: inds.length,
+    auto_applied_profile: autoAppliedProfile || undefined,
+    auto_applied_count: autoAppliedCount || undefined,
+    auto_reviewer_uuids: autoAppliedCount > 0
+      ? (await qAll(rvReviewer, (v: any) => v.review_uuid === rvUuid)).map((v: any) => v.reviewer_uuid).filter(Boolean)
+      : undefined,
+  } }
 }
 
 // ============================================================
@@ -1261,7 +1329,7 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
 
   await review.set(newRid, cleanForSet({
     review_uuid: newRid,
-    project_uuid: srcRv.project_uuid,
+    project_uuid: b.project_uuid || srcRv.project_uuid,
     phase_code: srcRv.phase_code,
     review_title: srcRv.review_title || 'DCP评审',
     meeting_time: 0,
@@ -1451,7 +1519,9 @@ export async function listReviewsByProject(req: any): Promise<PluginResponse> {
   const puid = getParam(req, 'project_uuid')
   const rvType = getParam(req, 'review_type') || ''
   if (!puid) return { body: { error: '缺少 project_uuid' }, statusCode: 400 }
-  let rvs = await qAll(review, (v: any) => v.project_uuid === puid && (!rvType || (v.review_type || 'dcp') === rvType))
+  const projectAliases = getParam(req, 'project_aliases').split(',').map(v => v.trim()).filter(Boolean)
+  const projectLookupIds = new Set([puid, ...projectAliases])
+  let rvs = await qAll(review, (v: any) => projectLookupIds.has(v.project_uuid) && (!rvType || (v.review_type || 'dcp') === rvType))
   // 补充阶段名称映射
   const allPhases = await qAll(phaseTpl)
   const phMap = new Map(allPhases.map((p: any) => [p.phase_code, p.phase_name]))
@@ -1512,7 +1582,7 @@ export async function listReviewsByProject(req: any): Promise<PluginResponse> {
   }))
   enriched.sort((a: any, b: any) => (b.created_at || 0) - (a.created_at || 0))
   // 返回已通过阶段列表（决议为 pass/conditional_pass，供前端依赖检查）
-  const allProjReviews = await qAll(review, (v: any) => v.project_uuid === puid)
+  const allProjReviews = await qAll(review, (v: any) => projectLookupIds.has(v.project_uuid))
   const passedPhases: string[] = []
   for (const r of allProjReviews) {
     const res = await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)
@@ -1944,6 +2014,7 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
 export async function startReview(req: any): Promise<PluginResponse> {
   try {
   const rid = getParam(req, 'review_uuid')
+  const b = (req.body || {}) as any
   if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
@@ -1959,7 +2030,9 @@ export async function startReview(req: any): Promise<PluginResponse> {
   const phaseTplRow = await qAll(phaseTpl, (v: any) => v.phase_code === (rv as any).phase_code && (v.review_type || 'dcp') === reviewType)
   const deps = jsonArr(phaseTplRow[0]?.dependencies || '[]')
   if (deps.length) {
-    const projReviews = await qAll(review, (v: any) => v.project_uuid === (rv as any).project_uuid)
+    const projectAliases = Array.isArray(b.project_aliases) ? b.project_aliases.filter(Boolean).map(String) : []
+    const projectLookupIds = new Set([(rv as any).project_uuid, ...projectAliases])
+    const projReviews = await qAll(review, (v: any) => projectLookupIds.has(v.project_uuid))
     const passedPhases = new Set<string>()
     for (const r of projReviews) {
       if (!deps.includes(r.phase_code)) continue
@@ -2647,6 +2720,15 @@ export async function updateReviewers(req: any): Promise<PluginResponse> {
     return { body: { error: `同一评审单中，一个用户不能同时担任多个评审角色：${desc}` }, statusCode: 400 }
   }
 
+  const profileSnapshotRaw = (rv as any).reviewer_role_assignments_snapshot_json || ''
+  const profileSnapshot = normalizeRoleAssignments(jsonArr(profileSnapshotRaw || '[]'))
+  if (profileSnapshot.length > 0) {
+    const snapshotErr = validateReviewersAgainstProfileSnapshot(normalized, profileSnapshot, roleTemplates)
+    if (snapshotErr) {
+      return { body: { error: snapshotErr }, statusCode: 400 }
+    }
+  }
+
   // 校验：决议角色必须指定且唯一（使用固化规则）
   let _rule: any
   try {
@@ -2685,6 +2767,9 @@ export async function updateReviewers(req: any): Promise<PluginResponse> {
       review_uuid: rid,
       reviewer_uuid: r.reviewer_uuid,
       role_name: r.role_name,
+      selection_mode: profileSnapshot.find((s: any) => s.role_name === r.role_name)?.mode || '',
+      default_reviewer_uuid: profileSnapshot.find((s: any) => s.role_name === r.role_name)?.default_reviewer_uuid || '',
+      candidate_uuids_json: JSON.stringify(profileSnapshot.find((s: any) => s.role_name === r.role_name)?.candidate_uuids || []),
       conclusion: '', risk_level: 'medium', opinion_summary: '',
       submitted_at: 0,
     }
@@ -4449,4 +4534,386 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
   }
 
   return { body: { ok: true, review_state: targetState, round_no: newRoundNo } }
+}
+
+// ============================================================
+// Reviewer Profile — 评审人 Profile 管理
+// ============================================================
+
+// ============================================================
+// Reviewer Profile — 角色分配模型
+//
+// 每个 Profile 的 role_assignments_json 是角色分配数组：
+//   { role_name, mode: 'single'|'pool', default_reviewer?: uuid, candidate_uuids?: uuid[] }
+//
+// single 模式：创建评审单时自动填入 default_reviewer，updateReviewers 时仅接受该人选
+// pool  模式：创建时不自动填入，updateReviewers 时限制候选范围为 candidate_uuids
+// ============================================================
+
+type ReviewerAssignmentRow = {
+  role_name: string
+  reviewer_uuid: string
+  selection_mode: 'single' | 'pool'
+  default_reviewer_uuid: string
+  candidate_uuids_json: string
+}
+
+function normalizeRoleAssignments(roleAssignments: any[]): any[] {
+  return (roleAssignments || []).map((ra: any) => ({
+    role_name: String(ra.role_name || ''),
+    mode: ra.mode === 'pool' ? 'pool' : 'single',
+    default_reviewer_uuid: String(ra.default_reviewer_uuid || ra.default_reviewer || ''),
+    candidate_uuids: Array.isArray(ra.candidate_uuids) ? [...new Set(ra.candidate_uuids.filter((u: any) => !!u).map((u: any) => String(u)))] : [],
+  }))
+}
+
+// 解析角色分配，返回会写入评审单的评审人快照行
+function resolveAutoReviewers(roleAssignments: any[], roleTemplates: any[]): ReviewerAssignmentRow[] {
+  const roleNames = new Set(roleTemplates.map((r: any) => r.role_name))
+  const autoReviewers: ReviewerAssignmentRow[] = []
+  for (const ra of normalizeRoleAssignments(roleAssignments)) {
+    if (!ra.role_name || !roleNames.has(ra.role_name)) continue
+    // 候选池只是可选范围，在发起人真正选择成员前不创建空评审人实体。
+    if (ra.mode !== 'single' || !ra.default_reviewer_uuid) continue
+    autoReviewers.push({
+      role_name: ra.role_name,
+      reviewer_uuid: ra.default_reviewer_uuid,
+      selection_mode: 'single',
+      default_reviewer_uuid: ra.default_reviewer_uuid,
+      candidate_uuids_json: JSON.stringify([ra.default_reviewer_uuid]),
+    })
+  }
+  return autoReviewers
+}
+
+// 将评审人写入实体（内部函数，被 createReview / updateReviewers / applyProfileToReview 共用）
+async function writeReviewersToEntities(rvUuid: string, reviewers: ReviewerAssignmentRow[], roleTemplates: any[], rv: any): Promise<any[]> {
+  // 删除旧评审人
+  const old = await qAll(rvReviewer, (v: any) => v.review_uuid === rvUuid)
+  for (const o of old) await rvReviewer.delete(o._key)
+
+  // 按 sort_order 排序
+  const ordered = reviewers.sort((a, b) => {
+    const ai = roleTemplates.find((rt: any) => rt.role_name === a.role_name)?.sort_order ?? 9999
+    const bi = roleTemplates.find((rt: any) => rt.role_name === b.role_name)?.sort_order ?? 9999
+    return ai - bi
+  })
+
+  // 写入新评审人
+  const savedPayload: any[] = []
+  for (let i = 0; i < ordered.length; i++) {
+    const r = ordered[i]
+    const key = `${rvUuid}_rvr_${i}`
+    const value = {
+      review_uuid: rvUuid, reviewer_uuid: r.reviewer_uuid, role_name: r.role_name,
+      selection_mode: r.selection_mode,
+      default_reviewer_uuid: r.default_reviewer_uuid,
+      candidate_uuids_json: r.candidate_uuids_json,
+      conclusion: '', risk_level: 'medium', opinion_summary: '', submitted_at: 0,
+    }
+    await rvReviewer.set(key, value)
+    savedPayload.push({ _key: key, ...value })
+  }
+
+  return savedPayload
+}
+
+// 校验角色分配中同一用户是否担任多个角色（single 模式 default 互查 + pool 候选去重）
+function validateRoleAssignmentsNoDupUsers(roleAssignments: any[]): string | null {
+  const uuidToRoles: Record<string, string[]> = {}
+  for (const ra of normalizeRoleAssignments(roleAssignments)) {
+    if (ra.mode === 'single' && ra.default_reviewer_uuid) {
+      if (!uuidToRoles[ra.default_reviewer_uuid]) uuidToRoles[ra.default_reviewer_uuid] = []
+      uuidToRoles[ra.default_reviewer_uuid].push(ra.role_name)
+    }
+    if (ra.mode === 'pool' && Array.isArray(ra.candidate_uuids)) {
+      for (const uid of ra.candidate_uuids) {
+        if (!uid) continue
+        if (!uuidToRoles[uid]) uuidToRoles[uid] = []
+        if (!uuidToRoles[uid].includes(ra.role_name)) uuidToRoles[uid].push(ra.role_name)
+      }
+    }
+  }
+  const multiRoleUsers = Object.entries(uuidToRoles).filter(([, roles]) => roles.length > 1)
+  if (multiRoleUsers.length > 0) {
+    return multiRoleUsers.map(([uuid, roles]) => `${uuid}(${roles.join('/')})`).join('、')
+  }
+  return null
+}
+
+// 校验提交的评审人是否在 profile 快照允许范围内（updateReviewers 调用）
+function validateReviewersAgainstProfileSnapshot(reviewers: Array<{role_name: string; reviewer_uuid: string}>, profileSnapshot: any[], roleTemplates: any[]): string | null {
+  const snapByRole = new Map<string, any>()
+  for (const ra of profileSnapshot) {
+    if (ra.role_name) snapByRole.set(ra.role_name, ra)
+  }
+  const roleNames = new Set(roleTemplates.map((r: any) => r.role_name))
+
+  for (const rv of reviewers) {
+    if (!rv.role_name || !rv.reviewer_uuid) continue
+    if (!roleNames.has(rv.role_name)) continue
+
+    const snap = snapByRole.get(rv.role_name)
+    if (!snap) continue // 快照中没有该角色 → 允许自由选择（管理员后来加了新角色）
+
+    if (snap.mode === 'single') {
+      if (snap.default_reviewer_uuid && rv.reviewer_uuid !== snap.default_reviewer_uuid) {
+        return `角色「${rv.role_name}」绑定了指定评审人，不可更换为其他人`
+      }
+    } else if (snap.mode === 'pool') {
+      const candidates: string[] = snap.candidate_uuids || []
+      if (candidates.length > 0 && !candidates.includes(rv.reviewer_uuid)) {
+        return `角色「${rv.role_name}」的评审人必须在候选池中选择`
+      }
+    }
+  }
+  return null
+}
+
+// GET /dcp/reviewer-profiles?review_type=dcp
+export async function listReviewerProfiles(req: any): Promise<PluginResponse> {
+  const rvType = getParam(req, 'review_type') || ''
+  const profiles = rvType
+    ? await qAll(reviewerProfile, (v: any) => (v.review_type || 'dcp') === rvType)
+    : await qAll(reviewerProfile)
+  profiles.sort((a: any, b: any) => (b.updated_at || b.created_at || 0) - (a.updated_at || a.created_at || 0))
+  return { body: { profiles } }
+}
+
+// POST /dcp/reviewer-profile
+// 角色分配模型：每个条目 { role_name, mode: 'single'|'pool', default_reviewer_uuid?, candidate_uuids[]? }
+export async function createReviewerProfile(req: any): Promise<PluginResponse> {
+  const b = (req.body || {}) as any
+  const operatorUuid = getOperator(req)
+  const { profile_name, review_type, description, role_assignments } = b
+  if (!profile_name || !profile_name.trim()) {
+    return { body: { error: 'Profile 名称不能为空' }, statusCode: 400 }
+  }
+  const rvType = review_type || 'dcp'
+  const now = Date.now()
+  const profileId = makeUuid()
+  const assignments = Array.isArray(role_assignments) ? role_assignments : []
+  // 校验：每个条目必须有 role_name 和 mode
+  for (const ra of assignments) {
+    if (!ra.role_name) {
+      return { body: { error: '每个角色分配必须包含 role_name' }, statusCode: 400 }
+    }
+    if (ra.mode !== 'single' && ra.mode !== 'pool') {
+      return { body: { error: `角色「${ra.role_name}」的 mode 必须为 single 或 pool` }, statusCode: 400 }
+    }
+    if (ra.mode === 'single' && !ra.default_reviewer_uuid) {
+      return { body: { error: `角色「${ra.role_name}」为 single 模式，必须指定 default_reviewer_uuid` }, statusCode: 400 }
+    }
+  }
+  // 校验：同一用户不担任多个角色
+  const dupErr = validateRoleAssignmentsNoDupUsers(assignments)
+  if (dupErr) {
+    return { body: { error: `同一用户不能同时担任多个角色：${dupErr}` }, statusCode: 400 }
+  }
+  await reviewerProfile.set(profileId, {
+    profile_name: profile_name.trim(),
+    review_type: rvType,
+    description: description || '',
+    role_assignments_json: JSON.stringify(assignments),
+    created_by: operatorUuid || '',
+    created_at: now,
+    updated_at: now,
+  })
+  Logger.info(`[DCP] ReviewerProfile created: ${profileId} by ${operatorUuid}`)
+  return { body: { profile_id: profileId, profile_name: profile_name.trim() } }
+}
+
+// GET /dcp/reviewer-profile/:profile_id
+export async function getReviewerProfile(req: any): Promise<PluginResponse> {
+  const pid = getParam(req, 'profile_id')
+  if (!pid) return { body: { error: '缺少 profile_id' }, statusCode: 400 }
+  const p = await reviewerProfile.get(pid)
+  if (!p) return { body: { error: 'Profile 不存在' }, statusCode: 404 }
+  return { body: { ...p, role_assignments: jsonArr((p as any).role_assignments_json || '[]') } }
+}
+
+// PUT /dcp/reviewer-profile/:profile_id
+export async function updateReviewerProfile(req: any): Promise<PluginResponse> {
+  const pid = getParam(req, 'profile_id')
+  const b = (req.body || {}) as any
+  const operatorUuid = getOperator(req)
+  if (!pid) return { body: { error: '缺少 profile_id' }, statusCode: 400 }
+  const p = await reviewerProfile.get(pid)
+  if (!p) return { body: { error: 'Profile 不存在' }, statusCode: 404 }
+  const { profile_name, review_type, description, role_assignments } = b
+  const assignments = Array.isArray(role_assignments) ? role_assignments : []
+  // 校验
+  for (const ra of assignments) {
+    if (!ra.role_name) {
+      return { body: { error: '每个角色分配必须包含 role_name' }, statusCode: 400 }
+    }
+    if (ra.mode !== 'single' && ra.mode !== 'pool') {
+      return { body: { error: `角色「${ra.role_name}」的 mode 必须为 single 或 pool` }, statusCode: 400 }
+    }
+  }
+  const dupErr = validateRoleAssignmentsNoDupUsers(assignments)
+  if (dupErr) {
+    return { body: { error: `同一用户不能同时担任多个角色：${dupErr}` }, statusCode: 400 }
+  }
+  const now = Date.now()
+  await reviewerProfile.set(pid, {
+    ...(p as any),
+    profile_name: profile_name?.trim() || (p as any).profile_name,
+    review_type: review_type || (p as any).review_type || 'dcp',
+    description: description !== undefined ? description : (p as any).description,
+    role_assignments_json: b.role_assignments !== undefined ? JSON.stringify(assignments) : (p as any).role_assignments_json,
+    updated_at: now,
+  })
+  Logger.info(`[DCP] ReviewerProfile updated: ${pid} by ${operatorUuid}`)
+  return { body: { ok: true } }
+}
+
+// DELETE /dcp/reviewer-profile/:profile_id
+export async function deleteReviewerProfile(req: any): Promise<PluginResponse> {
+  const pid = getParam(req, 'profile_id')
+  if (!pid) return { body: { error: '缺少 profile_id' }, statusCode: 400 }
+  const p = await reviewerProfile.get(pid)
+  if (!p) return { body: { error: 'Profile 不存在' }, statusCode: 404 }
+  // 检查是否有项目绑定引用此 Profile
+  const bindings = await qAll(projectBinding, (v: any) => v.profile_id === pid)
+  if (bindings.length > 0) {
+    return { body: { error: `此 Profile 已被 ${bindings.length} 个项目绑定，请先解除绑定再删除` }, statusCode: 400 }
+  }
+  await reviewerProfile.delete(pid)
+  Logger.info(`[DCP] ReviewerProfile deleted: ${pid}`)
+  return { body: { ok: true } }
+}
+
+// ============================================================
+// Project Binding — 项目与 Profile 绑定
+// ============================================================
+
+// GET /dcp/project-bindings?project_uuid=xxx
+export async function listProjectBindings(req: any): Promise<PluginResponse> {
+  const puid = getParam(req, 'project_uuid') || ''
+  const bindings = puid
+    ? await qAll(projectBinding, (v: any) => v.project_uuid === puid)
+    : await qAll(projectBinding)
+  // 为每个 binding 补充 profile_name
+  const enriched = await Promise.all(bindings.map(async (b: any) => {
+    let profileName = ''
+    try {
+      const p = await reviewerProfile.get(b.profile_id)
+      if (p) profileName = (p as any).profile_name || ''
+    } catch { /* profile 可能已删除 */ }
+    return { ...b, profile_name: profileName }
+  }))
+  return { body: { bindings: enriched } }
+}
+
+// POST /dcp/project-binding（upsert: 同一 project_uuid + review_type 覆盖）
+export async function upsertProjectBinding(req: any): Promise<PluginResponse> {
+  const b = (req.body || {}) as any
+  const operatorUuid = getOperator(req)
+  const { project_uuid, profile_id, review_type } = b
+  if (!project_uuid || !profile_id) {
+    return { body: { error: '缺少 project_uuid 或 profile_id' }, statusCode: 400 }
+  }
+  // 验证 Profile 存在
+  const p = await reviewerProfile.get(profile_id)
+  if (!p) return { body: { error: 'Profile 不存在' }, statusCode: 404 }
+  const rvType = review_type || 'dcp'
+  // 查找已有绑定（同 project + review_type）
+  const existing = await qAll(projectBinding, (v: any) => v.project_uuid === project_uuid && (v.review_type || 'dcp') === rvType)
+  const now = Date.now()
+  let bindingId: string
+  if (existing.length > 0) {
+    // 更新已有绑定
+    bindingId = existing[0]._key
+    await projectBinding.set(bindingId, {
+      ...existing[0],
+      profile_id,
+      updated_at: now,
+    })
+    Logger.info(`[DCP] ProjectBinding updated: ${bindingId} → ${profile_id}`)
+  } else {
+    // 新建绑定
+    bindingId = makeUuid()
+    await projectBinding.set(bindingId, {
+      project_uuid, profile_id,
+      review_type: rvType,
+      created_by: operatorUuid || '',
+      created_at: now,
+    })
+    Logger.info(`[DCP] ProjectBinding created: ${bindingId}`)
+  }
+  return { body: { binding_id: bindingId, project_uuid, profile_id, profile_name: (p as any).profile_name || '' } }
+}
+
+// DELETE /dcp/project-binding/:binding_id
+export async function deleteProjectBinding(req: any): Promise<PluginResponse> {
+  const bid = getParam(req, 'binding_id')
+  if (!bid) return { body: { error: '缺少 binding_id' }, statusCode: 400 }
+  try {
+    await projectBinding.delete(bid)
+    Logger.info(`[DCP] ProjectBinding deleted: ${bid}`)
+  } catch (e: any) {
+    return { body: { error: `删除失败: ${e?.message || e}` }, statusCode: 500 }
+  }
+  return { body: { ok: true } }
+}
+
+// ============================================================
+// Apply Profile to Review — 将 Profile 评审人应用到评审单
+// ============================================================
+
+// POST /dcp/review/:review_uuid/apply-profile
+export async function applyProfileToReview(req: any): Promise<PluginResponse> {
+  const rid = getParam(req, 'review_uuid')
+  const b = (req.body || {}) as any
+  const operatorUuid = getOperator(req)
+  const { profile_id } = b
+  if (!rid || !profile_id) {
+    return { body: { error: '缺少 review_uuid 或 profile_id' }, statusCode: 400 }
+  }
+  const rv = await review.get(rid)
+  if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
+  if (operatorUuid && (rv as any).creator_uuid && operatorUuid !== (rv as any).creator_uuid) {
+    return { body: { error: '仅创建者可应用 Profile' }, statusCode: 403 }
+  }
+  if (rv.status !== 'draft') {
+    return { body: { error: '评审已发起，不可修改评审人' }, statusCode: 403 }
+  }
+  const p = await reviewerProfile.get(profile_id)
+  if (!p) return { body: { error: 'Profile 不存在' }, statusCode: 404 }
+  const roleAssignments = normalizeRoleAssignments(jsonArr((p as any).role_assignments_json || (p as any).reviewers_json || '[]'))
+  if (roleAssignments.length === 0) {
+    return { body: { error: 'Profile 中没有角色分配' }, statusCode: 400 }
+  }
+  const reviewType = (rv as any).review_type || 'dcp'
+  const profileType = (p as any).review_type || 'dcp'
+  if (reviewType !== profileType) {
+    return { body: { error: `Profile 类型（${profileType}）与评审单类型（${reviewType}）不匹配` }, statusCode: 400 }
+  }
+  const roleTemplates = await getRoleTemplatesForReview(rv)
+  const snapshotReviewers = resolveAutoReviewers(roleAssignments, roleTemplates)
+  let savedPayload: any[] = []
+  try {
+    savedPayload = await writeReviewersToEntities(rid, snapshotReviewers, roleTemplates, rv)
+  } catch (e: any) {
+    return { body: { error: e.message || String(e) }, statusCode: 400 }
+  }
+  await review.set(rid, cleanForSet({
+    ...rv,
+    reviewers_json: JSON.stringify(savedPayload),
+    reviewer_profile_id: profile_id,
+    reviewer_profile_name: (p as any).profile_name || '',
+    reviewer_profile_snapshot_json: JSON.stringify({
+      profile_id,
+      profile_name: (p as any).profile_name || '',
+      review_type: profileType,
+      role_assignments: roleAssignments,
+    }),
+    reviewer_role_assignments_snapshot_json: JSON.stringify(roleAssignments),
+    updated_at: Date.now(),
+  }))
+  await writeAudit(rid, operatorUuid, '应用Profile', rid,
+    `从Profile「${(p as any).profile_name || profile_id}」应用评审人，共 ${savedPayload.length} 人`)
+  Logger.info(`[DCP] Profile applied to review ${rid}: ${(p as any).profile_name}, ${savedPayload.length} reviewers`)
+  return { body: { ok: true, applied_count: savedPayload.length, reviewers: savedPayload, profile_name: (p as any).profile_name } }
 }

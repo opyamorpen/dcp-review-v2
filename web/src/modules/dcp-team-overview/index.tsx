@@ -452,6 +452,15 @@ const App: React.FC = () => {
     try { await reviewApi.startReview(rid); refreshDetail() } catch (e: any) { setMsg('发起失败: ' + e.message) }
   }
 
+  async function handleRecreate(rid: string) {
+    try {
+      const res = await reviewApi.recreateReview(rid, { project_identifier: detail?.review?.project_identifier || detail?.review?.project_uuid || '' }) as any
+      await openDetail(res.review_uuid || rid)
+    } catch (e: any) {
+      setMsg('重新发起失败: ' + (e.message || '未知错误'))
+    }
+  }
+
   if (loading && view === 'stats' && !stats) return <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>加载中…</div>
 
   if (view === 'detail' && detail) {
@@ -463,7 +472,7 @@ const App: React.FC = () => {
           projectUuid={rv.project_uuid || ''} projectKey={rv.project_identifier || rv.project_uuid || ''}
           componentUuid="" viewUuid="" data={detail}
           onBack={() => { setView('stats'); setDetail(null); loadStats(startDate, endDate) }}
-          onRefresh={refreshDetail} onStart={handleStart} msg={msg} setMsg={setMsg}
+          onRefresh={refreshDetail} onStart={handleStart} onRecreate={handleRecreate} msg={msg} setMsg={setMsg}
         />
       </div>
     )

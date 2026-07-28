@@ -25,11 +25,16 @@ function callApi<T = any>(url: string, options: { method?: string; body?: string
       } else {
         // 尝试从响应体提取 error 字段
         let msg = `${xhr.status}`
+        let payload: any = null
         try {
           const json = JSON.parse(xhr.responseText)
-          msg = json.body?.error || json.data?.error || json.error || xhr.responseText.substring(0, 200)
+          payload = json.body || json.data || json
+          msg = payload?.error || xhr.responseText.substring(0, 200)
         } catch { msg = xhr.responseText.substring(0, 200) }
-        reject(new Error(msg))
+        const error: any = new Error(msg)
+        error.data = payload
+        error.status = xhr.status
+        reject(error)
       }
     }
     xhr.onerror = () => reject(new Error('Network error'))
@@ -95,10 +100,83 @@ export async function searchUsers(keyword: string): Promise<{ uuid: string; name
   ).slice(0, 20)
 }
 
+// ONES 项目成员管理是页面内部 API，需要在用户登录态下调用。
+// 提交时必须带上项目成员角色的完整成员集合，避免覆盖原有成员。
+export async function ensureProjectMembers(projectUuid: string, userUuids: string[]): Promise<void> {
+  const teamUuid = getTeamUUID()
+  const requested = [...new Set(userUuids.filter(Boolean))]
+  if (!teamUuid || !projectUuid || requested.length === 0) return
+
+  const fail = (reason: string, userUuid = requested[0] || '') => {
+    const error: any = new Error(reason || '项目成员同步失败')
+    error.data = {
+      code: 'PROJECT_MEMBER_ADD_FAILED',
+      user_uuid: userUuid,
+      project_uuid: projectUuid,
+      reason: reason || '项目成员同步失败',
+    }
+    throw error
+  }
+
+  const rolesResponse = await fetch(
+    `/project/api/project/team/${teamUuid}/project/${projectUuid}/role_members`,
+    { credentials: 'include' }
+  )
+  if (!rolesResponse.ok) fail(`读取项目成员失败（${rolesResponse.status}）`)
+  const rolesJson = await rolesResponse.json()
+  const roleMembers = rolesJson?.data?.role_members || rolesJson?.role_members || []
+  const roleItems = Array.isArray(roleMembers) ? roleMembers : []
+  const projectMemberRole = roleItems.find((item: any) => item?.role?.is_project_member)
+    || roleItems.find((item: any) => item?.role?.name === '项目成员')
+  const roleUuid = projectMemberRole?.role?.uuid || ''
+  if (!roleUuid) fail('未找到项目成员角色')
+
+  const existingMembers = (Array.isArray(projectMemberRole.members) ? projectMemberRole.members : [])
+    .map((member: any) => typeof member === 'string' ? member : member?.uuid)
+    .filter(Boolean)
+  const missing = requested.filter(uuid => !existingMembers.includes(uuid))
+  if (missing.length === 0) return
+
+  const members = [...new Set([...existingMembers, ...missing])]
+  const updateResponse = await fetch(
+    `/project/api/project/team/${teamUuid}/project/${projectUuid}/role/${roleUuid}/members/update`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ members }),
+    }
+  )
+  if (!updateResponse.ok) {
+    let reason = `更新项目成员失败（${updateResponse.status}）`
+    try {
+      const payload = await updateResponse.json()
+      reason = payload?.reason || payload?.message || payload?.data?.reason || reason
+    } catch {}
+    fail(reason, missing[0])
+  }
+
+  const updateJson = await updateResponse.json()
+  const updatedRoles = updateJson?.data?.role_members || updateJson?.role_members || []
+  const updatedRole = (Array.isArray(updatedRoles) ? updatedRoles : []).find((item: any) => item?.role?.uuid === roleUuid)
+  const updatedMembers = (Array.isArray(updatedRole?.members) ? updatedRole.members : [])
+    .map((member: any) => typeof member === 'string' ? member : member?.uuid)
+    .filter(Boolean)
+  const notAdded = missing.find(uuid => !updatedMembers.includes(uuid))
+  if (notAdded) fail('项目成员接口未返回新增成员', notAdded)
+}
+
 // ---- 评审单 ----
 export const createReview = (data: any) => callApi('/dcp/review', { method: 'POST', body: JSON.stringify(data) })
 export const getReviewDetail = (uuid: string) => callApi(`/dcp/review/${uuid}`)
-export const listReviewsByProject = (puuid: string, reviewType?: string) => callApi(`/dcp/reviews/by-project/${puuid}${reviewType ? `?review_type=${reviewType}` : ''}`)
+export const listReviewsByProject = (puuid: string, reviewType?: string, projectAliases: string[] = []) => {
+  const params = new URLSearchParams()
+  if (reviewType) params.set('review_type', reviewType)
+  const aliases = [...new Set(projectAliases.filter(alias => alias && alias !== puuid))]
+  if (aliases.length > 0) params.set('project_aliases', aliases.join(','))
+  const query = params.toString()
+  return callApi(`/dcp/reviews/by-project/${puuid}${query ? `?${query}` : ''}`)
+}
 export const listTeamReviews = () => callApi('/dcp/reviews/team')
 export const startReview = (uuid: string, data?: any) => callApi(`/dcp/review/${uuid}/start`, { method: 'POST', body: JSON.stringify(data || {}) })
 export const recallReview = (uuid: string, data?: any) => callApi(`/dcp/review/${uuid}/recall`, { method: 'POST', body: JSON.stringify(data || {}) })
@@ -150,3 +228,27 @@ export const syncRemediationStatus = (uuid: string, items: any[]) =>
   callApi(`/dcp/review/${uuid}/remediation/sync`, { method: 'POST', body: JSON.stringify({ items }) })
 export const confirmRemediation = (uuid: string, data: { publisher_uuid: string; next_action: 'complete' | 're_review' }) =>
   callApi(`/dcp/review/${uuid}/remediation/confirm`, { method: 'POST', body: JSON.stringify(data) })
+
+// ---- Reviewer Profile ----
+export const listReviewerProfiles = (reviewType?: string) =>
+  callApi(`/dcp/reviewer-profiles${reviewType ? `?review_type=${reviewType}` : ''}`)
+export const createReviewerProfile = (data: { profile_name: string; review_type: string; description?: string; role_assignments: { role_name: string; mode: 'single' | 'pool'; default_reviewer_uuid?: string; candidate_uuids?: string[] }[] }) =>
+  callApi('/dcp/reviewer-profile', { method: 'POST', body: JSON.stringify(data) })
+export const getReviewerProfile = (profileId: string) =>
+  callApi(`/dcp/reviewer-profile/${profileId}`)
+export const updateReviewerProfile = (profileId: string, data: any) =>
+  callApi(`/dcp/reviewer-profile/${profileId}`, { method: 'PUT', body: JSON.stringify(data) })
+export const deleteReviewerProfile = (profileId: string) =>
+  callApi(`/dcp/reviewer-profile/${profileId}`, { method: 'DELETE' })
+
+// ---- Project Binding ----
+export const listProjectBindings = (projectUuid?: string) =>
+  callApi(`/dcp/project-bindings${projectUuid ? `?project_uuid=${projectUuid}` : ''}`)
+export const upsertProjectBinding = (data: { project_uuid: string; profile_id: string; review_type: string }) =>
+  callApi('/dcp/project-binding', { method: 'POST', body: JSON.stringify(data) })
+export const deleteProjectBinding = (bindingId: string) =>
+  callApi(`/dcp/project-binding/${bindingId}`, { method: 'DELETE' })
+
+// ---- Apply Profile to Review ----
+export const applyProfileToReview = (reviewUuid: string, profileId: string) =>
+  callApi(`/dcp/review/${reviewUuid}/apply-profile`, { method: 'POST', body: JSON.stringify({ profile_id: profileId }) })

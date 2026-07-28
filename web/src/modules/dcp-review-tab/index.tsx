@@ -105,6 +105,7 @@ const S: Record<string, any> = {
 // ============================================================
 const App: React.FC = () => {
   const [projectUuid, setProjectUuid] = useState('')
+  const [projectAliases, setProjectAliases] = useState<string[]>([])
   const [projectKey, setProjectKey] = useState('')
   const [projectName, setProjectName] = useState('')
   const [componentUuid, setComponentUuid] = useState('')
@@ -178,6 +179,10 @@ const App: React.FC = () => {
               if (realIdentifier) setProjectKey(realIdentifier)
               const realUuid = exch.project_uuid || ''
               if (realUuid) {
+                // 评审绑定按项目真实 UUID 保存；URL 中的项目编码仅用于路由展示。
+                setProjectUuid(realUuid)
+                setProjectAliases(ck[1] !== realUuid ? [ck[1]] : [])
+                loadList(realUuid, undefined, [ck[1]])
                 return fetch(`/project/api/project/team/${tuid}/project/${realUuid}/stamps/data?t=project`, {
                   method: 'POST', credentials: 'include',
                   headers: { 'Content-Type': 'application/json' },
@@ -204,7 +209,7 @@ const App: React.FC = () => {
     if (!puid) {
       try { const m = document.referrer.match(/[?&]projectUUID=([^&]+)/); if (m) puid = m[1] } catch {}
     }
-    if (puid) { setProjectUuid(puid); loadList(puid) }
+    if (puid) { setProjectUuid(puid); setProjectAliases([puid]); loadList(puid) }
     else { setMsg('无法识别当前项目'); setLoading(false) }
     // 加载阶段配置 + IPD 流程图布局
     api.getPluginConfig().then((c: any) => {
@@ -216,20 +221,20 @@ const App: React.FC = () => {
     if (tu) {
       fetch(`/project/api/project/team/${tu}/../../users/me`, { credentials: 'include' })
         .then(r => r.json())
-        .then(j => { const d = j.data || j; if (d.uuid) setCurrentUser({ uuid: d.uuid, name: d.name || d.uuid }) })
+        .then(j => { const d = j.data || j; if (d.uuid) setCurrentUser({ uuid: d.uuid, name: d.name || '当前用户' }) })
         .catch(() => {})
     }
     // 检查新建权限
     checkPermission('dcp_create_review').then(p => setHasCreatePerm(p))
   }, [])
 
-  async function loadList(puid: string, rvType?: string) {
+  async function loadList(puid: string, rvType?: string, aliases: string[] = projectAliases) {
     setLoading(true)
     setPage(1)
     const t = rvType || reviewType
     try {
       // 加载全部评审（用于 IPD 流程图），客户端按 tab 过滤列表
-      const data = await api.listReviewsByProject(puid)
+      const data = await api.listReviewsByProject(puid, undefined, aliases)
       const all = data.reviews || []
       setAllReviews(all)
       setReviews(all.filter((r: any) => (r.review_type || 'dcp') === t))
@@ -255,21 +260,27 @@ const App: React.FC = () => {
   async function handleCreate(form: any) {
     setMsg('')
     try {
-      const res = await api.createReview({ ...form, project_uuid: projectUuid, project_identifier: projectKey })
+      const res = await api.createReview({ ...form, project_uuid: projectUuid, project_identifier: projectKey, project_aliases: projectAliases })
+      let memberSyncError = ''
+      if (Array.isArray(res.auto_reviewer_uuids) && res.auto_reviewer_uuids.length > 0) {
+        try { await api.ensureProjectMembers(projectUuid, res.auto_reviewer_uuids) }
+        catch (e: any) { memberSyncError = e?.message || '自动添加项目成员失败' }
+      }
       setSelectedReviewUuid(res.review_uuid)
       await loadDetail(res.review_uuid)
+      if (memberSyncError) setMsg(`评审单已创建，但${memberSyncError}`)
     } catch (e: any) { setMsg(`创建失败: ${e.message}`) }
   }
 
   async function handleStart(rid: string) {
     setMsg('')
-    try { await api.startReview(rid, { operator_uuid: currentUser.uuid }); await loadDetail(rid) } catch (e: any) { setMsg(e.message) }
+    try { await api.startReview(rid, { operator_uuid: currentUser.uuid, project_aliases: projectAliases }); await loadDetail(rid) } catch (e: any) { setMsg(e.message) }
   }
 
   async function handleRecreate(rid: string) {
     setMsg('')
     try {
-      const res = await api.recreateReview(rid, { operator_uuid: currentUser.uuid, project_identifier: projectKey }) as any
+      const res = await api.recreateReview(rid, { operator_uuid: currentUser.uuid, project_uuid: projectUuid, project_identifier: projectKey }) as any
       await loadList(projectUuid)
       await loadDetail(res.review_uuid)
     } catch (e: any) { setMsg('重新发起失败: ' + (e.message || '未知错误')) }
@@ -279,7 +290,7 @@ const App: React.FC = () => {
   if (!projectUuid) return <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>{msg || '无法获取项目上下文'}</div>
 
   if (view === 'detail' && detail) {
-    return <ReviewDetail projectUuid={projectUuid} projectKey={projectKey} componentUuid={componentUuid} viewUuid={viewUuid} data={detail} onBack={() => { setView('list'); setDetail(null); loadList(projectUuid) }} onRefresh={() => refreshDetail((detail.review as any).review_uuid)} onStart={handleStart} onRecreate={handleRecreate} msg={msg} setMsg={setMsg} />
+    return <ReviewDetail projectUuid={projectUuid} projectKey={projectKey} projectName={projectName} componentUuid={componentUuid} viewUuid={viewUuid} data={detail} onBack={() => { setView('list'); setDetail(null); loadList(projectUuid) }} onRefresh={() => refreshDetail((detail.review as any).review_uuid)} onStart={handleStart} onRecreate={handleRecreate} msg={msg} setMsg={setMsg} />
   }
 
   // 筛选后的评审列表
@@ -437,13 +448,15 @@ const UserPicker: React.FC<{
   onChange: (user: { uuid: string; name: string }) => void
   placeholder?: string
   displayName?: string
-}> = ({ value, onChange, placeholder = '搜索用户姓名或邮箱…', displayName }) => {
+  allowedUserIds?: string[]  // 限制可选用户范围（空=不限制）
+}> = ({ value, onChange, placeholder = '搜索用户姓名或邮箱…', displayName, allowedUserIds }) => {
   const [results, setResults] = useState<{ uuid: string; name: string; email: string }[]>([])
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [selectedName, setSelectedName] = useState('')
   const timerRef = React.useRef<any>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
+  const allowedSet = React.useMemo(() => allowedUserIds && allowedUserIds.length > 0 ? new Set(allowedUserIds) : null, [allowedUserIds])
 
   // 外部 value 清空时同步重置内部状态
   useEffect(() => {
@@ -460,8 +473,9 @@ const UserPicker: React.FC<{
     if (kw.trim().length < 1) { setResults([]); setOpen(false); return }
     setLoading(true)
     api.searchUsers(kw.trim()).then(users => {
-      setResults(users)
-      setOpen(users.length > 0)
+      const filtered = allowedSet ? users.filter(u => allowedSet.has(u.uuid)) : users
+      setResults(filtered)
+      setOpen(filtered.length > 0)
       setLoading(false)
     }).catch(() => { setResults([]); setOpen(false); setLoading(false) })
   }
@@ -544,6 +558,197 @@ const UserPicker: React.FC<{
   )
 }
 
+const CandidatePoolSelector: React.FC<{
+  roleName: string
+  candidateUuids: string[]
+  value: string
+  nameMap: Record<string, string>
+  allowEmpty: boolean
+  onChange: (uuid: string) => void
+}> = ({ roleName, candidateUuids, value, nameMap, allowEmpty, onChange }) => {
+  const [open, setOpen] = useState(false)
+  const [dropUp, setDropUp] = useState(false)
+  const ref = React.useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handleOutsideClick(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [open])
+
+  if (value) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, background: '#e6f4ff', padding: '2px 10px', borderRadius: 4 }}>
+          {nameMap[value] || '未知成员'}
+        </span>
+        <button
+          type="button"
+          onClick={() => { setOpen(false); onChange('') }}
+          aria-label={`清除${roleName}评审人`}
+          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#ff4d4f', fontSize: 16, padding: 0, lineHeight: 1 }}
+          title="清除"
+        >×</button>
+      </div>
+    )
+  }
+
+  if (candidateUuids.length === 0) {
+    return <div style={{ color: '#ff4d4f', fontSize: 12 }}>此角色的候选池为空，请先完善 Profile 配置</div>
+  }
+
+  const options = [
+    ...(allowEmpty ? [{ uuid: '', name: '暂不选择' }] : []),
+    ...candidateUuids.map(uuid => ({ uuid, name: nameMap[uuid] || '未知成员' })),
+  ]
+  const selectedName = allowEmpty ? '暂不选择' : '请选择评审人'
+
+  function toggleOpen() {
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect()
+      const menuHeight = Math.min(220, options.length * 40 + 8)
+      setDropUp(rect.bottom + menuHeight > window.innerHeight && rect.top > menuHeight)
+    }
+    setOpen(current => !current)
+  }
+
+  return (
+    <div ref={ref} style={{ position: 'relative', width: '100%', maxWidth: 240 }}>
+      <button
+        type="button"
+        aria-label={`${roleName}评审人`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={toggleOpen}
+        style={{
+          width: '100%', height: 34, padding: '0 10px', border: `1px solid ${open ? '#1677ff' : '#d9d9d9'}`,
+          borderRadius: 4, background: '#fff', color: value ? '#262626' : '#8c8c8c',
+          cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          boxShadow: open ? '0 0 0 2px rgba(22,119,255,0.12)' : 'none', textAlign: 'left',
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedName}</span>
+        <span aria-hidden="true" style={{ marginLeft: 12, color: '#8c8c8c', fontSize: 11, transform: open ? 'rotate(180deg)' : 'none' }}>▼</span>
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          aria-label={`${roleName}候选成员`}
+          style={{
+            position: 'absolute', zIndex: 1000, left: 0, right: 0, maxHeight: 220, overflowY: 'auto',
+            top: dropUp ? 'auto' : 'calc(100% + 4px)', bottom: dropUp ? 'calc(100% + 4px)' : 'auto',
+            background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4,
+            boxShadow: '0 6px 18px rgba(0,0,0,0.12)', padding: '4px 0',
+          }}
+        >
+          {options.map(option => {
+            const selected = option.uuid === value
+            return (
+              <div
+                key={option.uuid || '__empty__'}
+                role="option"
+                aria-selected={selected}
+                onClick={() => { onChange(option.uuid); setOpen(false) }}
+                style={{
+                  minHeight: 34, padding: '0 10px', cursor: 'pointer', display: 'flex', alignItems: 'center',
+                  justifyContent: 'space-between', gap: 12, fontSize: 13,
+                  color: option.uuid ? '#262626' : '#8c8c8c', background: selected ? '#e6f4ff' : '#fff',
+                }}
+                onMouseEnter={event => { if (!selected) event.currentTarget.style.background = '#f5f5f5' }}
+                onMouseLeave={event => { if (!selected) event.currentTarget.style.background = '#fff' }}
+              >
+                <span>{option.name}</span>
+                {selected && <span aria-hidden="true" style={{ color: '#1677ff', fontWeight: 600 }}>✓</span>}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const ReviewerHelp: React.FC<{ profileName?: string }> = ({ profileName }) => {
+  const [open, setOpen] = useState(false)
+  const ref = React.useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handleOutsideClick(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [open])
+
+  return (
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', marginLeft: 6, verticalAlign: 'middle' }}>
+      <button
+        type="button"
+        aria-label="查看评审人配置说明"
+        aria-expanded={open}
+        onClick={() => setOpen(current => !current)}
+        title="评审人配置说明"
+        style={{
+          width: 18, height: 18, padding: 0, borderRadius: '50%', border: '1px solid #bfbfbf',
+          background: open ? '#e6f4ff' : '#fff', color: open ? '#1677ff' : '#8c8c8c',
+          cursor: 'pointer', fontSize: 12, lineHeight: '16px', textAlign: 'center', fontWeight: 600,
+        }}
+      >?</button>
+      {open && (
+        <div style={{
+          position: 'absolute', zIndex: 1100, top: 26, left: -8, width: 300, padding: '10px 12px',
+          border: '1px solid #d9d9d9', borderRadius: 4, background: '#fff', color: '#595959',
+          boxShadow: '0 6px 18px rgba(0,0,0,0.12)', fontSize: 12, lineHeight: 1.7, fontWeight: 400,
+        }}>
+          {profileName && <div style={{ marginBottom: 6, color: '#262626', fontWeight: 600 }}>Profile：{profileName}</div>}
+          <div>决议人不参与前置评审，提交要求满足后进入待决议。</div>
+          <div>单人默认模式由 Profile 锁定默认人选。</div>
+          <div>候选池模式只能从预设候选成员中单选。</div>
+          <div>评审单按创建时的 Profile 快照执行，后续配置变更不影响本单。</div>
+        </div>
+      )}
+    </span>
+  )
+}
+
+const PluginMessageDialog: React.FC<{
+  title: string
+  message: string
+  detail?: string
+  onClose: () => void
+}> = ({ title, message, detail, onClose }) => (
+  <div
+    role="presentation"
+    onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}
+    style={{
+      position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.38)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+    }}
+  >
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="reviewer-message-title"
+      style={{ width: 'min(440px, 100%)', background: '#fff', borderRadius: 6, boxShadow: '0 12px 36px rgba(0,0,0,0.2)' }}
+    >
+      <div style={{ padding: '16px 20px', borderBottom: '1px solid #f0f0f0' }}>
+        <h3 id="reviewer-message-title" style={{ margin: 0, fontSize: 16, color: '#262626' }}>{title}</h3>
+      </div>
+      <div style={{ padding: '18px 20px', color: '#595959', fontSize: 14, lineHeight: 1.7 }}>
+        <div>{message}</div>
+        {detail && <div style={{ marginTop: 8, color: '#8c8c8c', fontSize: 12 }}>{detail}</div>}
+      </div>
+      <div style={{ padding: '12px 20px', borderTop: '1px solid #f0f0f0', textAlign: 'right' }}>
+        <button type="button" style={{ ...S.btn(true), marginRight: 0 }} onClick={onClose}>我知道了</button>
+      </div>
+    </div>
+  </div>
+)
+
 // ============================================================
 // 创建评审表单
 // ============================================================
@@ -613,7 +818,7 @@ const CreateReviewForm: React.FC<{ projectUuid: string; projectKey: string; proj
 // ============================================================
 // 评审详情
 // ============================================================
-export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; componentUuid: string; viewUuid: string; data: any; onBack: () => void; onRefresh: () => void; onStart: (rid: string) => void; onRecreate: (rid: string) => void; msg: string; setMsg: (v: string) => void }> = ({ projectUuid, projectKey, componentUuid, viewUuid, data, onBack, onRefresh, onStart, onRecreate, msg, setMsg }) => {
+export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; projectName?: string; componentUuid: string; viewUuid: string; data: any; onBack: () => void; onRefresh: () => void; onStart: (rid: string) => void; onRecreate: (rid: string) => void; msg: string; setMsg: (v: string) => void }> = ({ projectUuid, projectKey, projectName = '', componentUuid, viewUuid, data, onBack, onRefresh, onStart, onRecreate, msg, setMsg }) => {
   const rv = data.review
   const [activeTab, setActiveTab] = useState<TabKey>('materials')
   const effState = rv.effective_state || rv.status
@@ -633,14 +838,12 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
     { key: 'compare', label: '轮次对比' },
     { key: 'timeline', label: '状态轨迹' },
     { key: 'audit', label: '审计日志' },
-  ].filter(t => {
-    if (t.key === 'compare') {
-      // 仅在≥2轮时显示：历史决议数+当前轮≥2
-      const totalRounds = (data.resolutions || []).length + (data.resolution ? 0 : 1)
-      return totalRounds >= 2 || (rv.round_no || 1) >= 2
-    }
-    return true
-  })
+  ]
+  const totalRounds = (data.resolutions || []).length + (data.resolution ? 0 : 1)
+  if (totalRounds < 2 && (rv.round_no || 1) < 2) {
+    const idx = TABS.findIndex(t => t.key === 'compare')
+    if (idx >= 0) TABS.splice(idx, 1)
+  }
 
   const [showPublishForm, setShowPublishForm] = useState(false)
   const [resolutionForm, setResolutionForm] = useState({ final_conclusion: '', condition_notes: '' })
@@ -1256,7 +1459,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       </div>
       {/* 内容区 */}
       {activeTab === 'materials' && <div style={S.tabPanel}><MaterialsPanel data={data} editable={isEditable} isRemediation={isRemediation} onRefresh={onRefresh} currentUser={currentUser} /></div>}
-      {activeTab === 'reviewers' && <div style={S.tabPanel}><ReviewersPanel data={data} editable={isEditable} isReviewing={isReviewing} onRefresh={onRefresh} currentUser={currentUser} /></div>}
+      {activeTab === 'reviewers' && <div style={S.tabPanel}><ReviewersPanel data={data} projectUuid={projectUuid} projectName={projectName || projectKey} editable={isEditable} isReviewing={isReviewing} onRefresh={onRefresh} currentUser={currentUser} /></div>}
       {activeTab === 'checklist' && (
         <div style={S.tabPanel}>
           {(data.checklist || []).length === 0 ? (
@@ -1679,7 +1882,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; isRemediation?: b
 // ============================================================
 // 评审人与意见面板
 // ============================================================
-const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: boolean; onRefresh: () => void; currentUser: { uuid: string; name: string } }> = ({ data, editable, isReviewing, onRefresh, currentUser }) => {
+const ReviewersPanel: React.FC<{ data: any; projectUuid: string; projectName: string; editable: boolean; isReviewing: boolean; onRefresh: () => void; currentUser: { uuid: string; name: string } }> = ({ data, projectUuid, projectName, editable, isReviewing, onRefresh, currentUser }) => {
     const reviewers = data.reviewers || []
     const [roles, setRoles] = useState<any[]>([])
     const [selected, setSelected] = useState<Record<string, string>>({})
@@ -1687,14 +1890,66 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
     const [reviewerDirty, setReviewerDirty] = useState(false)
     const [savingReviewers, setSavingReviewers] = useState(false)
     const [publisherRole, setPublisherRole] = useState('')
+    const [messageDialog, setMessageDialog] = useState<{ title: string; message: string; detail?: string } | null>(null)
     const reviewType = (data.review?.review_type || 'dcp')
+
+    // 解析冻结的 Profile 快照，构建角色约束
+    const profileSnapshot = React.useMemo(() => {
+      try {
+        const raw = data.review?.reviewer_role_assignments_snapshot_json
+        if (!raw) return null
+        const arr = typeof raw === 'string' ? JSON.parse(raw) : raw
+        if (!Array.isArray(arr) || arr.length === 0) return null
+        const map: Record<string, { mode: 'single' | 'pool'; default_reviewer_uuid: string; candidate_uuids: string[] }> = {}
+        for (const item of arr) {
+          if (!item.role_name) continue
+          map[item.role_name] = {
+            mode: item.mode === 'pool' ? 'pool' : 'single',
+            default_reviewer_uuid: String(item.default_reviewer_uuid || ''),
+            candidate_uuids: Array.isArray(item.candidate_uuids) ? item.candidate_uuids.filter((u: any) => !!u).map(String) : [],
+          }
+        }
+        return Object.keys(map).length > 0 ? map : null
+      } catch { return null }
+    }, [data.review?.reviewer_role_assignments_snapshot_json])
+
+    // 计算每个角色的 UserPicker 限制
+    function getRoleRestriction(roleName: string): { allowedUserIds?: string[]; defaultUuid?: string } {
+      if (!profileSnapshot) return {}
+      const snap = profileSnapshot[roleName]
+      if (!snap) return {} // 快照中没有的角色（管理员后来新增）→ 不限制
+      if (snap.mode === 'single') {
+        // 单人模式：仅允许默认人选
+        return {
+          allowedUserIds: snap.default_reviewer_uuid ? [snap.default_reviewer_uuid] : [],
+          defaultUuid: snap.default_reviewer_uuid || '',
+        }
+      }
+      // 候选池模式：限制为候选列表
+      return {
+        allowedUserIds: snap.candidate_uuids.length > 0 ? snap.candidate_uuids : undefined,
+      }
+    }
 
     useEffect(() => {
       const uuids = reviewers.map((r: any) => r.reviewer_uuid).filter(Boolean)
       if (uuids.length > 0) {
         api.resolveReviewerNames(uuids).then(setNameMap)
       }
-    }, [data.reviewers])
+      // 也加载 Profile 快照中的默认评审人/候选人名称
+      if (profileSnapshot) {
+        const profileUuids: string[] = []
+        for (const snap of Object.values(profileSnapshot)) {
+          if (snap.default_reviewer_uuid) profileUuids.push(snap.default_reviewer_uuid)
+          if (snap.candidate_uuids) profileUuids.push(...snap.candidate_uuids)
+        }
+        if (profileUuids.length > 0) {
+          api.resolveReviewerNames([...new Set(profileUuids)]).then(names => {
+            setNameMap(prev => ({ ...names, ...prev }))
+          })
+        }
+      }
+    }, [data.reviewers, profileSnapshot])
 
     useEffect(() => {
       api.getPluginConfig().then(c => {
@@ -1704,17 +1959,29 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
       }).catch(() => {})
     }, [reviewType])
 
-    // 草稿态：角色列表加载后自动回填已有评审人
+    // 草稿态：角色列表加载后自动回填已有评审人 + 应用 Profile 默认值
     useEffect(() => {
       if (editable && roles.length > 0) {
         const sel: Record<string, string> = {}
+        // 先回填已有评审人
         reviewers.forEach((r: any) => { sel[r.role_name] = r.reviewer_uuid || '' })
+        // Profile 快照：single 模式自动填入默认评审人（如果尚未指定）
+        if (profileSnapshot) {
+          for (const role of roles) {
+            if (sel[role.role_name]) continue // 已有指定，不覆盖
+            const snap = profileSnapshot[role.role_name]
+            if (snap && snap.mode === 'single' && snap.default_reviewer_uuid) {
+              sel[role.role_name] = snap.default_reviewer_uuid
+            }
+          }
+        }
         setSelected(sel)
         setReviewerDirty(false)
       }
     }, [roles, editable])
 
     async function saveReviewers() {
+      setMessageDialog(null)
       // 客户端校验：必投或否决权角色必须选择评审人
       const missingRequired: string[] = []
       for (const role of roles) {
@@ -1723,13 +1990,29 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
         }
       }
       if (missingRequired.length > 0) {
-        alert(`以下角色为必选，请选择评审人：\n${missingRequired.join('、')}`)
+        setMessageDialog({ title: '请完善评审人', message: `以下角色为必选：${missingRequired.join('、')}` })
         return
+      }
+      // Profile 快照校验：single 角色不可更换默认人选
+      if (profileSnapshot) {
+        for (const role of roles) {
+          const snap = profileSnapshot[role.role_name]
+          if (!snap) continue
+          const currentUuid = (selected[role.role_name] || '').trim()
+          if (snap.mode === 'single' && snap.default_reviewer_uuid && currentUuid && currentUuid !== snap.default_reviewer_uuid) {
+            setMessageDialog({ title: '无法更换默认评审人', message: `角色「${role.role_name}」已由 Profile 锁定默认人选。` })
+            return
+          }
+        }
       }
       const list = Object.entries(selected).filter(([, uid]) => uid.trim()).map(([role, uid]) => ({ role_name: role, reviewer_uuid: uid }))
       setSavingReviewers(true)
       try {
-        const res = await api.updateReviewers(data.review.review_uuid, { reviewers: list, operator_uuid: currentUser.uuid }) as any
+        await api.ensureProjectMembers(projectUuid, list.map(item => item.reviewer_uuid))
+        const res = await api.updateReviewers(data.review.review_uuid, {
+          reviewers: list,
+          operator_uuid: currentUser.uuid,
+        }) as any
         if (!res?.ok && !res?.data?.ok) {
           throw new Error(res?.error || res?.data?.error || '保存失败')
         }
@@ -1743,12 +2026,33 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
             const savedRoles = new Set(savedReviewers.map((r: any) => r.role_name))
             const missing = list.filter(r => !savedRoles.has(r.role_name)).map(r => r.role_name)
             if (missing.length > 0) {
-              alert(`评审人保存后刷新校验异常，缺失角色：${missing.join('、')}\n请重新打开编辑并保存。`)
+              setMessageDialog({
+                title: '保存结果异常',
+                message: `刷新后缺失角色：${missing.join('、')}`,
+                detail: '请重新打开评审人编辑并再次保存。',
+              })
             }
           } catch {}
         }, 1200)
       } catch (e: any) {
-        alert(e?.message || e?.data?.error || '保存失败')
+        const errorData = e?.data || {}
+        if (errorData.code === 'PROJECT_MEMBER_ADD_FAILED') {
+          let memberName = nameMap[errorData.user_uuid] || ''
+          if (!memberName && errorData.user_uuid) {
+            try {
+              const names = await api.resolveReviewerNames([errorData.user_uuid])
+              memberName = names[errorData.user_uuid] || ''
+            } catch {}
+          }
+          if (!memberName || memberName === errorData.user_uuid) memberName = '所选成员'
+          setMessageDialog({
+            title: '无法添加项目成员',
+            message: `无法自动将成员「${memberName}」加入项目「${projectName || '当前项目'}」。`,
+            detail: '请先在项目成员中手动添加该成员，再重新保存评审人。',
+          })
+        } else {
+          setMessageDialog({ title: '保存评审人失败', message: e?.message || errorData.error || '保存失败' })
+        }
         onRefresh()
       } finally {
         setSavingReviewers(false)
@@ -1760,7 +2064,14 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
         {/* 评审人区域 */}
         <div style={{ marginBottom: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <h4 style={S.sectionTitle}>评审人（{reviewers.length}人，已提交 {reviewers.filter((r: any) => r.submitted_at > 0).length}）</h4>
+            <h4 style={S.sectionTitle}>
+              评审人（{reviewers.length}人，已提交 {reviewers.filter((r: any) => r.submitted_at > 0).length}）
+              {data.review?.reviewer_profile_name && (
+                <span style={{ display: 'inline-block', marginLeft: 8, padding: '2px 10px', borderRadius: 4, fontSize: 12, fontWeight: 400, background: '#f0f5ff', color: '#1677ff' }}>
+                  Profile: {data.review.reviewer_profile_name}
+                </span>
+              )}
+            </h4>
           </div>
 
           {editable ? (
@@ -1771,13 +2082,11 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                   {!publisherRole && <div style={{ marginBottom: 8, padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#fff1f0', color: '#ff4d4f' }}>
                     ⚠ 当前{reviewType.toUpperCase()}未配置决议角色，请先在「决议规则」中选择一个决议角色。
                   </div>}
-                  {publisherRole && <div style={{ marginBottom: 8, padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#e6f4ff', color: '#1677ff' }}>
-                    💡 决议人不参与前置评审；当前置评审满足提交要求后，系统会为决议人生成"待我决议"。
-                  </div>}
                   <div style={S.tableWrap}>
                   <table style={S.table}>
                     <thead><tr>
-                      <th style={S.th}>角色</th><th style={{ ...S.th, width: 160 }}>角色属性</th><th style={S.th}>评审人</th>
+                      <th style={S.th}>角色</th><th style={{ ...S.th, width: 160 }}>角色属性</th>
+                      <th style={S.th}>评审人<ReviewerHelp profileName={data.review?.reviewer_profile_name} /></th>
                     </tr></thead>
                     <tbody>
                       {roles.map((role: any) => {
@@ -1796,8 +2105,40 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                               {!isPublisher && !role.must_vote && !role.has_veto && <span style={{ color: '#999' }}>-</span>}
                             </td>
                             <td style={S.td}>
-                              <UserPicker value={selected[role.role_name] || ''} displayName={nameMap[selected[role.role_name] || '']} onChange={u => { setSelected({ ...selected, [role.role_name]: u.uuid }); setReviewerDirty(true) }} placeholder={isRequired || isPublisher ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'} />
-                              {isPublisher && !selected[role.role_name] && <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>决议角色必须指定 1 名人员</div>}
+                              {(() => {
+                                const restriction = getRoleRestriction(role.role_name)
+                                const snapshot = profileSnapshot?.[role.role_name]
+                                const setRoleReviewer = (uuid: string) => {
+                                  setSelected(prev => ({ ...prev, [role.role_name]: uuid }))
+                                  setReviewerDirty(true)
+                                }
+                                return (
+                                  <>
+                                    {snapshot?.mode === 'pool' ? (
+                                      <CandidatePoolSelector
+                                        roleName={role.role_name}
+                                        candidateUuids={snapshot.candidate_uuids}
+                                        value={selected[role.role_name] || ''}
+                                        nameMap={nameMap}
+                                        allowEmpty={!isRequired && !isPublisher}
+                                        onChange={setRoleReviewer}
+                                      />
+                                    ) : (
+                                      <UserPicker
+                                        value={selected[role.role_name] || ''}
+                                        displayName={nameMap[selected[role.role_name] || '']}
+                                        onChange={u => setRoleReviewer(u.uuid)}
+                                        placeholder={isRequired || isPublisher ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'}
+                                        allowedUserIds={restriction.allowedUserIds}
+                                      />
+                                    )}
+                                    {isPublisher && !selected[role.role_name] && <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>决议角色必须指定 1 名人员</div>}
+                                    {restriction.allowedUserIds && restriction.allowedUserIds.length === 0 && (
+                                      <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>此角色的 Profile 设置了单人模式但未指定默认评审人</div>
+                                    )}
+                                  </>
+                                )
+                              })()}
                             </td>
                           </tr>
                         )
@@ -1830,7 +2171,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                     {reviewers.map((r: any, i: number) => (
                       <tr key={i}>
                         <td style={{ ...S.td, fontWeight: 500 }}>{r.role_name}</td>
-                        <td style={S.td}>{nameMap[r.reviewer_uuid] || r.reviewer_uuid || '-'}</td>
+                        <td style={S.td}>{r.reviewer_uuid ? (nameMap[r.reviewer_uuid] || '未知成员') : '-'}</td>
                         <td style={{ ...S.td, textAlign: 'center' }}>{r.conclusion ? CONCLUSION_LABELS[r.conclusion] || r.conclusion : '-'}</td>
                         <td style={{ ...S.td, textAlign: 'center' }}>{r.risk_level === 'low' ? '低' : r.risk_level === 'medium' ? '中' : r.risk_level === 'high' ? '高' : r.submitted_at > 0 ? (r.risk_level || '中') : '—'}</td>
                         <td style={{ ...S.td, fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.opinion_summary || '-'}</td>
@@ -1847,6 +2188,14 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
             </>
           )}
         </div>
+        {messageDialog && (
+          <PluginMessageDialog
+            title={messageDialog.title}
+            message={messageDialog.message}
+            detail={messageDialog.detail}
+            onClose={() => setMessageDialog(null)}
+          />
+        )}
       </div>
     )
 }
@@ -2238,7 +2587,7 @@ const AuditPanel: React.FC<{ reviewUuid: string }> = ({ reviewUuid }) => {
             {logs.map((l: any, i: number) => (
               <tr key={i}>
                 <td style={{ ...S.td, fontSize: 12, color: '#999' }}>{l.timestamp ? new Date(l.timestamp).toLocaleString('zh-CN') : '-'}</td>
-                <td style={{ ...S.td, fontSize: 11 }}>{nameMap[l.operator_uuid] || l.operator_uuid || '-'}</td>
+                <td style={{ ...S.td, fontSize: 11 }}>{l.operator_uuid ? (nameMap[l.operator_uuid] || '未知用户') : '-'}</td>
                 <td style={S.td}>{ACTION_LABELS[l.action] || l.action}</td>
                 <td style={{ ...S.td, fontSize: 12 }}>{l.detail}</td>
                 <td style={{ ...S.td, textAlign: 'center' }}>

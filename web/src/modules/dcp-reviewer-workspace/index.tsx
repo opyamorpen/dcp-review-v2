@@ -61,6 +61,20 @@ async function resolveProjectNames(reviews: any[]): Promise<Record<string, strin
  return nameMap
 }
 
+async function copyReviewLinkToClipboard(text: string): Promise<boolean> {
+ try {
+  await navigator.clipboard.writeText(text)
+  return true
+ } catch {
+  const ta = document.createElement('textarea')
+  ta.value = text
+  document.body.appendChild(ta)
+  ta.select()
+  try { document.execCommand('copy'); return true } catch { return false }
+  finally { document.body.removeChild(ta) }
+ }
+}
+
 // ============================================================
 // 常量
 // ============================================================
@@ -339,7 +353,7 @@ const App: React.FC = () => {
  {filteredReviews.map((r: any, i: number) => (
  <tr key={i} style={{ cursor: 'pointer' }} onClick={() => openReview(r, myTab === 'pending' ? 'review' : myTab === 'resolution' ? 'resolution' : 'readonly')}>
  <td style={{ ...S.td, fontFamily: 'monospace', fontSize: 12, color: '#1677ff', fontWeight: 600 }}>
- <span style={{ cursor: 'pointer' }} title="点击复制编号" onClick={(e) => { e.stopPropagation(); copyReviewLink(r.review_number || r.review_uuid, r.review_uuid) }}>{r.review_number || '-'}</span>
+ <span style={{ cursor: 'pointer' }} title="点击复制编号" onClick={async (e) => { e.stopPropagation(); await copyReviewLinkToClipboard(r.review_number || r.review_uuid) }}>{r.review_number || '-'}</span>
  </td>
  <td style={{ ...S.td, textAlign: 'center' }}>
  <span style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 3, fontSize: 11, fontWeight: 600, background: (r.review_type || 'dcp') === 'tr' ? '#f9f0ff' : '#e6f4ff', color: (r.review_type || 'dcp') === 'tr' ? '#722ed1' : '#1677ff' }}>{(r.review_type || 'dcp') === 'tr' ? 'TR' : 'DCP'}</span>
@@ -546,20 +560,9 @@ const _prevResolution = (data.resolutions || []).find((r: any) => (r.round_no ||
 const canPublishResolution = canPublish && rv.status === 'reviewing' && resolutionReady && !data.resolution
 
  // 复制编号到剪贴板
- async function copyReviewLink(reviewNumber: string, reviewUuid: string) {
- const text = reviewNumber
- try {
- await navigator.clipboard.writeText(text)
- setCopyToast('已复制编号')
- } catch {
- // 降级方案
- const ta = document.createElement('textarea')
- ta.value = text
- document.body.appendChild(ta)
- ta.select()
- try { document.execCommand('copy'); setCopyToast('已复制编号') } catch {}
- document.body.removeChild(ta)
- }
+ async function handleCopyReviewLink(reviewNumber: string) {
+ const ok = await copyReviewLinkToClipboard(reviewNumber)
+ if (ok) setCopyToast('已复制编号')
  setTimeout(() => setCopyToast(''), 2000)
  }
 
@@ -1042,7 +1045,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  <div style={{ ...S.card, background: '#f0f5ff' }}>
  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
  <div>
- <span style={{ fontFamily: 'monospace', fontSize: 13, color: '#1677ff', fontWeight: 600, marginRight: 8, cursor: 'pointer' }} title="点击复制编号" onClick={() => copyReviewLink(rv.review_number || rv.review_uuid, rv.review_uuid)}>{rv.review_number || ''}</span>
+ <span style={{ fontFamily: 'monospace', fontSize: 13, color: '#1677ff', fontWeight: 600, marginRight: 8, cursor: 'pointer' }} title="点击复制编号" onClick={() => handleCopyReviewLink(rv.review_number || rv.review_uuid)}>{rv.review_number || ''}</span>
  <strong style={{ fontSize: 16 }}>{rv.phase_name || rv.phase_code} — {rv.review_title || 'DCP评审'}</strong>
  </div>
  <div style={{ fontSize: 12, color: '#666' }}>
