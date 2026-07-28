@@ -648,6 +648,50 @@ const CandidatePoolSelector: React.FC<{
   )
 }
 
+const ReviewerHelp: React.FC<{ profileName?: string }> = ({ profileName }) => {
+  const [open, setOpen] = useState(false)
+  const ref = React.useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handleOutsideClick(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [open])
+
+  return (
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex', marginLeft: 6, verticalAlign: 'middle' }}>
+      <button
+        type="button"
+        aria-label="查看评审人配置说明"
+        aria-expanded={open}
+        onClick={() => setOpen(current => !current)}
+        title="评审人配置说明"
+        style={{
+          width: 18, height: 18, padding: 0, borderRadius: '50%', border: '1px solid #bfbfbf',
+          background: open ? '#e6f4ff' : '#fff', color: open ? '#1677ff' : '#8c8c8c',
+          cursor: 'pointer', fontSize: 12, lineHeight: '16px', textAlign: 'center', fontWeight: 600,
+        }}
+      >?</button>
+      {open && (
+        <div style={{
+          position: 'absolute', zIndex: 1100, top: 26, left: -8, width: 300, padding: '10px 12px',
+          border: '1px solid #d9d9d9', borderRadius: 4, background: '#fff', color: '#595959',
+          boxShadow: '0 6px 18px rgba(0,0,0,0.12)', fontSize: 12, lineHeight: 1.7, fontWeight: 400,
+        }}>
+          {profileName && <div style={{ marginBottom: 6, color: '#262626', fontWeight: 600 }}>Profile：{profileName}</div>}
+          <div>决议人不参与前置评审，提交要求满足后进入待决议。</div>
+          <div>单人默认模式由 Profile 锁定默认人选。</div>
+          <div>候选池模式只能从预设候选成员中单选。</div>
+          <div>评审单按创建时的 Profile 快照执行，后续配置变更不影响本单。</div>
+        </div>
+      )}
+    </span>
+  )
+}
+
 // ============================================================
 // 创建评审表单
 // ============================================================
@@ -1954,13 +1998,11 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                   {!publisherRole && <div style={{ marginBottom: 8, padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#fff1f0', color: '#ff4d4f' }}>
                     ⚠ 当前{reviewType.toUpperCase()}未配置决议角色，请先在「决议规则」中选择一个决议角色。
                   </div>}
-                  {publisherRole && <div style={{ marginBottom: 8, padding: '8px 12px', borderRadius: 4, fontSize: 12, background: '#e6f4ff', color: '#1677ff' }}>
-                    💡 决议人不参与前置评审；当前置评审满足提交要求后，系统会为决议人生成"待我决议"。
-                  </div>}
                   <div style={S.tableWrap}>
                   <table style={S.table}>
                     <thead><tr>
-                      <th style={S.th}>角色</th><th style={{ ...S.th, width: 160 }}>角色属性</th><th style={S.th}>评审人</th>
+                      <th style={S.th}>角色</th><th style={{ ...S.th, width: 160 }}>角色属性</th>
+                      <th style={S.th}>评审人<ReviewerHelp profileName={data.review?.reviewer_profile_name} /></th>
                     </tr></thead>
                     <tbody>
                       {roles.map((role: any) => {
@@ -2009,12 +2051,6 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                                     {isPublisher && !selected[role.role_name] && <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>决议角色必须指定 1 名人员</div>}
                                     {restriction.allowedUserIds && restriction.allowedUserIds.length === 0 && (
                                       <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>此角色的 Profile 设置了单人模式但未指定默认评审人</div>
-                                    )}
-                                    {snapshot?.mode === 'single' && snapshot.default_reviewer_uuid && (
-                                      <div style={{ fontSize: 11, color: '#1677ff', marginTop: 2 }}>已由 Profile「{data.review?.reviewer_profile_name || ''}」锁定默认人选</div>
-                                    )}
-                                    {snapshot?.mode === 'pool' && snapshot.candidate_uuids.length > 0 && (
-                                      <div style={{ fontSize: 11, color: '#1677ff', marginTop: 6 }}>候选池模式，仅可单选以上成员</div>
                                     )}
                                   </>
                                 )
