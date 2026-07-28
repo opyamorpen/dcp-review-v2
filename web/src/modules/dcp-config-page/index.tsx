@@ -1024,7 +1024,7 @@ const ReviewerProfilesPanel: React.FC<{
         const list = data?.members || data?.data || []
         setMembers((Array.isArray(list) ? list : []).map((u: any) => ({
           uuid: u.uuid || '',
-          name: u.name || u.email || u.uuid || '',
+          name: u.name || u.email || '未知成员',
           email: u.email || '',
         })).filter((u: any) => u.uuid))
       })
@@ -1045,7 +1045,7 @@ const ReviewerProfilesPanel: React.FC<{
         const byUuid = new Map<string, ProjectOption>()
         list.forEach((p: any) => {
           const uuid = p?.uuid || ''
-          if (uuid) byUuid.set(uuid, { uuid, name: p?.name || p?.identifier || uuid, identifier: p?.identifier || p?.key || '' })
+          if (uuid) byUuid.set(uuid, { uuid, name: p?.name || p?.identifier || '未命名项目', identifier: p?.identifier || p?.key || '' })
         })
         setProjects([...byUuid.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')))
       })
@@ -1316,10 +1316,10 @@ const ReviewerProfilesPanel: React.FC<{
                 {projectBindings.map((b: any) => (
                   <tr key={b._key}>
                     <td style={S.td}>
-                      <div style={{ fontWeight: 500 }}>{projects.find(p => p.uuid === b.project_uuid || p.identifier === b.project_uuid)?.name || b.project_name || b.project_identifier || b.project_uuid}</div>
+                      <div style={{ fontWeight: 500 }}>{projects.find(p => p.uuid === b.project_uuid || p.identifier === b.project_uuid)?.name || b.project_name || b.project_identifier || '未知项目'}</div>
                       {projects.find(p => p.uuid === b.project_uuid || p.identifier === b.project_uuid)?.identifier && <div style={{ color: '#999', fontSize: 11, marginTop: 2 }}>{projects.find(p => p.uuid === b.project_uuid || p.identifier === b.project_uuid)?.identifier}</div>}
                     </td>
-                    <td style={S.td}>{profiles.find(p => p._key === b.profile_id)?.profile_name || b.profile_name || b.profile_id}</td>
+                    <td style={S.td}>{profiles.find(p => p._key === b.profile_id)?.profile_name || b.profile_name || '未解析 Profile'}</td>
                     <td style={S.td}>{(b.review_type || 'dcp').toUpperCase()}</td>
                     <td style={S.td}><button style={S.delBtn} onClick={() => handleDeleteBinding(b._key)}>删除</button></td>
                   </tr>
@@ -1449,7 +1449,7 @@ const CandidatePoolPicker: React.FC<{
           const m = members.find(x => x.uuid === uid)
           return (
             <span key={uid} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, background: '#e6f4ff', color: '#1677ff', fontSize: 12 }}>
-              {m?.name || uid}
+              {m?.name || '未知成员'}
               <button type="button" title="移除候选人" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#1677ff', padding: 0, lineHeight: 1 }} onClick={() => onToggle(uid)}>×</button>
             </span>
           )
@@ -1476,7 +1476,7 @@ const CandidatePoolPicker: React.FC<{
               style={{ padding: '9px 12px', cursor: 'pointer', borderBottom: '1px solid #f5f5f5' }}
             >
               <div style={{ fontWeight: 500 }}>{m.name}</div>
-              <div style={{ color: '#999', fontSize: 11, marginTop: 2 }}>{m.email || m.uuid}</div>
+              {m.email && <div style={{ color: '#999', fontSize: 11, marginTop: 2 }}>{m.email}</div>}
             </div>
           ))}
         </div>
@@ -1519,7 +1519,7 @@ const ProjectMultiPicker: React.FC<{
           const project = projects.find(p => p.uuid === uuid)
           return (
             <span key={uuid} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 7px', borderRadius: 4, background: '#f0f5ff', color: '#1677ff', fontSize: 12 }}>
-              {project?.name || uuid}
+              {project?.name || '未知项目'}
               <button type="button" title="移除项目" onClick={() => onChange(selected.filter(id => id !== uuid))} style={{ border: 'none', padding: 0, background: 'transparent', color: '#1677ff', cursor: 'pointer', lineHeight: 1 }}>×</button>
             </span>
           )
@@ -1575,7 +1575,7 @@ const UserPicker: React.FC<{
     const base = allowedSet ? members.filter(m => allowedSet.has(m.uuid)) : members
     if (!query.trim()) return base.slice(0, 30)
     const kw = query.trim().toLowerCase()
-    return base.filter(m => m.name.toLowerCase().includes(kw) || m.email.toLowerCase().includes(kw) || m.uuid.toLowerCase().includes(kw)).slice(0, 30)
+    return base.filter(m => m.name.toLowerCase().includes(kw) || m.email.toLowerCase().includes(kw)).slice(0, 30)
   }, [allowedSet, members, query])
   const shownName = value ? (displayName || members.find(m => m.uuid === value)?.name || '') : ''
 
@@ -1618,7 +1618,7 @@ const UserPicker: React.FC<{
               style={{ padding: '8px 10px', cursor: 'pointer', borderBottom: '1px solid #f5f5f5' }}
             >
               <div style={{ fontWeight: 500 }}>{m.name}</div>
-              <div style={{ fontSize: 11, color: '#999' }}>{m.email || m.uuid}</div>
+              {m.email && <div style={{ fontSize: 11, color: '#999' }}>{m.email}</div>}
             </div>
           ))}
         </div>

@@ -25,11 +25,16 @@ function callApi<T = any>(url: string, options: { method?: string; body?: string
       } else {
         // 尝试从响应体提取 error 字段
         let msg = `${xhr.status}`
+        let payload: any = null
         try {
           const json = JSON.parse(xhr.responseText)
-          msg = json.body?.error || json.data?.error || json.error || xhr.responseText.substring(0, 200)
+          payload = json.body || json.data || json
+          msg = payload?.error || xhr.responseText.substring(0, 200)
         } catch { msg = xhr.responseText.substring(0, 200) }
-        reject(new Error(msg))
+        const error: any = new Error(msg)
+        error.data = payload
+        error.status = xhr.status
+        reject(error)
       }
     }
     xhr.onerror = () => reject(new Error('Network error'))
@@ -93,6 +98,72 @@ export async function searchUsers(keyword: string): Promise<{ uuid: string; name
   return _memberCache.filter(u =>
     u.name.toLowerCase().includes(kw) || u.email.toLowerCase().includes(kw)
   ).slice(0, 20)
+}
+
+// ONES 项目成员管理是页面内部 API，需要在用户登录态下调用。
+// 提交时必须带上项目成员角色的完整成员集合，避免覆盖原有成员。
+export async function ensureProjectMembers(projectUuid: string, userUuids: string[]): Promise<void> {
+  const teamUuid = getTeamUUID()
+  const requested = [...new Set(userUuids.filter(Boolean))]
+  if (!teamUuid || !projectUuid || requested.length === 0) return
+
+  const fail = (reason: string, userUuid = requested[0] || '') => {
+    const error: any = new Error(reason || '项目成员同步失败')
+    error.data = {
+      code: 'PROJECT_MEMBER_ADD_FAILED',
+      user_uuid: userUuid,
+      project_uuid: projectUuid,
+      reason: reason || '项目成员同步失败',
+    }
+    throw error
+  }
+
+  const rolesResponse = await fetch(
+    `/project/api/project/team/${teamUuid}/project/${projectUuid}/role_members`,
+    { credentials: 'include' }
+  )
+  if (!rolesResponse.ok) fail(`读取项目成员失败（${rolesResponse.status}）`)
+  const rolesJson = await rolesResponse.json()
+  const roleMembers = rolesJson?.data?.role_members || rolesJson?.role_members || []
+  const roleItems = Array.isArray(roleMembers) ? roleMembers : []
+  const projectMemberRole = roleItems.find((item: any) => item?.role?.is_project_member)
+    || roleItems.find((item: any) => item?.role?.name === '项目成员')
+  const roleUuid = projectMemberRole?.role?.uuid || ''
+  if (!roleUuid) fail('未找到项目成员角色')
+
+  const existingMembers = (Array.isArray(projectMemberRole.members) ? projectMemberRole.members : [])
+    .map((member: any) => typeof member === 'string' ? member : member?.uuid)
+    .filter(Boolean)
+  const missing = requested.filter(uuid => !existingMembers.includes(uuid))
+  if (missing.length === 0) return
+
+  const members = [...new Set([...existingMembers, ...missing])]
+  const updateResponse = await fetch(
+    `/project/api/project/team/${teamUuid}/project/${projectUuid}/role/${roleUuid}/members/update`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ members }),
+    }
+  )
+  if (!updateResponse.ok) {
+    let reason = `更新项目成员失败（${updateResponse.status}）`
+    try {
+      const payload = await updateResponse.json()
+      reason = payload?.reason || payload?.message || payload?.data?.reason || reason
+    } catch {}
+    fail(reason, missing[0])
+  }
+
+  const updateJson = await updateResponse.json()
+  const updatedRoles = updateJson?.data?.role_members || updateJson?.role_members || []
+  const updatedRole = (Array.isArray(updatedRoles) ? updatedRoles : []).find((item: any) => item?.role?.uuid === roleUuid)
+  const updatedMembers = (Array.isArray(updatedRole?.members) ? updatedRole.members : [])
+    .map((member: any) => typeof member === 'string' ? member : member?.uuid)
+    .filter(Boolean)
+  const notAdded = missing.find(uuid => !updatedMembers.includes(uuid))
+  if (notAdded) fail('项目成员接口未返回新增成员', notAdded)
 }
 
 // ---- 评审单 ----

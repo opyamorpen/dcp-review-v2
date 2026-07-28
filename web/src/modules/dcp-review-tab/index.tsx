@@ -221,7 +221,7 @@ const App: React.FC = () => {
     if (tu) {
       fetch(`/project/api/project/team/${tu}/../../users/me`, { credentials: 'include' })
         .then(r => r.json())
-        .then(j => { const d = j.data || j; if (d.uuid) setCurrentUser({ uuid: d.uuid, name: d.name || d.uuid }) })
+        .then(j => { const d = j.data || j; if (d.uuid) setCurrentUser({ uuid: d.uuid, name: d.name || '当前用户' }) })
         .catch(() => {})
     }
     // 检查新建权限
@@ -261,8 +261,14 @@ const App: React.FC = () => {
     setMsg('')
     try {
       const res = await api.createReview({ ...form, project_uuid: projectUuid, project_identifier: projectKey, project_aliases: projectAliases })
+      let memberSyncError = ''
+      if (Array.isArray(res.auto_reviewer_uuids) && res.auto_reviewer_uuids.length > 0) {
+        try { await api.ensureProjectMembers(projectUuid, res.auto_reviewer_uuids) }
+        catch (e: any) { memberSyncError = e?.message || '自动添加项目成员失败' }
+      }
       setSelectedReviewUuid(res.review_uuid)
       await loadDetail(res.review_uuid)
+      if (memberSyncError) setMsg(`评审单已创建，但${memberSyncError}`)
     } catch (e: any) { setMsg(`创建失败: ${e.message}`) }
   }
 
@@ -284,7 +290,7 @@ const App: React.FC = () => {
   if (!projectUuid) return <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>{msg || '无法获取项目上下文'}</div>
 
   if (view === 'detail' && detail) {
-    return <ReviewDetail projectUuid={projectUuid} projectKey={projectKey} componentUuid={componentUuid} viewUuid={viewUuid} data={detail} onBack={() => { setView('list'); setDetail(null); loadList(projectUuid) }} onRefresh={() => refreshDetail((detail.review as any).review_uuid)} onStart={handleStart} onRecreate={handleRecreate} msg={msg} setMsg={setMsg} />
+    return <ReviewDetail projectUuid={projectUuid} projectKey={projectKey} projectName={projectName} componentUuid={componentUuid} viewUuid={viewUuid} data={detail} onBack={() => { setView('list'); setDetail(null); loadList(projectUuid) }} onRefresh={() => refreshDetail((detail.review as any).review_uuid)} onStart={handleStart} onRecreate={handleRecreate} msg={msg} setMsg={setMsg} />
   }
 
   // 筛选后的评审列表
@@ -579,9 +585,9 @@ const CandidatePoolSelector: React.FC<{
 
   const options = [
     ...(allowEmpty ? [{ uuid: '', name: '暂不选择' }] : []),
-    ...candidateUuids.map(uuid => ({ uuid, name: nameMap[uuid] || uuid })),
+    ...candidateUuids.map(uuid => ({ uuid, name: nameMap[uuid] || '未知成员' })),
   ]
-  const selectedName = value ? (nameMap[value] || value) : (allowEmpty ? '暂不选择' : '请选择评审人')
+  const selectedName = value ? (nameMap[value] || '未知成员') : (allowEmpty ? '暂不选择' : '请选择评审人')
 
   function toggleOpen() {
     if (!open && ref.current) {
@@ -692,6 +698,40 @@ const ReviewerHelp: React.FC<{ profileName?: string }> = ({ profileName }) => {
   )
 }
 
+const PluginMessageDialog: React.FC<{
+  title: string
+  message: string
+  detail?: string
+  onClose: () => void
+}> = ({ title, message, detail, onClose }) => (
+  <div
+    role="presentation"
+    onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}
+    style={{
+      position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.38)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24,
+    }}
+  >
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="reviewer-message-title"
+      style={{ width: 'min(440px, 100%)', background: '#fff', borderRadius: 6, boxShadow: '0 12px 36px rgba(0,0,0,0.2)' }}
+    >
+      <div style={{ padding: '16px 20px', borderBottom: '1px solid #f0f0f0' }}>
+        <h3 id="reviewer-message-title" style={{ margin: 0, fontSize: 16, color: '#262626' }}>{title}</h3>
+      </div>
+      <div style={{ padding: '18px 20px', color: '#595959', fontSize: 14, lineHeight: 1.7 }}>
+        <div>{message}</div>
+        {detail && <div style={{ marginTop: 8, color: '#8c8c8c', fontSize: 12 }}>{detail}</div>}
+      </div>
+      <div style={{ padding: '12px 20px', borderTop: '1px solid #f0f0f0', textAlign: 'right' }}>
+        <button type="button" style={{ ...S.btn(true), marginRight: 0 }} onClick={onClose}>我知道了</button>
+      </div>
+    </div>
+  </div>
+)
+
 // ============================================================
 // 创建评审表单
 // ============================================================
@@ -761,7 +801,7 @@ const CreateReviewForm: React.FC<{ projectUuid: string; projectKey: string; proj
 // ============================================================
 // 评审详情
 // ============================================================
-export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; componentUuid: string; viewUuid: string; data: any; onBack: () => void; onRefresh: () => void; onStart: (rid: string) => void; onRecreate: (rid: string) => void; msg: string; setMsg: (v: string) => void }> = ({ projectUuid, projectKey, componentUuid, viewUuid, data, onBack, onRefresh, onStart, onRecreate, msg, setMsg }) => {
+export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; projectName?: string; componentUuid: string; viewUuid: string; data: any; onBack: () => void; onRefresh: () => void; onStart: (rid: string) => void; onRecreate: (rid: string) => void; msg: string; setMsg: (v: string) => void }> = ({ projectUuid, projectKey, projectName = '', componentUuid, viewUuid, data, onBack, onRefresh, onStart, onRecreate, msg, setMsg }) => {
   const rv = data.review
   const [activeTab, setActiveTab] = useState<TabKey>('materials')
   const effState = rv.effective_state || rv.status
@@ -1402,7 +1442,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; c
       </div>
       {/* 内容区 */}
       {activeTab === 'materials' && <div style={S.tabPanel}><MaterialsPanel data={data} editable={isEditable} isRemediation={isRemediation} onRefresh={onRefresh} currentUser={currentUser} /></div>}
-      {activeTab === 'reviewers' && <div style={S.tabPanel}><ReviewersPanel data={data} editable={isEditable} isReviewing={isReviewing} onRefresh={onRefresh} currentUser={currentUser} /></div>}
+      {activeTab === 'reviewers' && <div style={S.tabPanel}><ReviewersPanel data={data} projectUuid={projectUuid} projectName={projectName || projectKey} editable={isEditable} isReviewing={isReviewing} onRefresh={onRefresh} currentUser={currentUser} /></div>}
       {activeTab === 'checklist' && (
         <div style={S.tabPanel}>
           {(data.checklist || []).length === 0 ? (
@@ -1825,7 +1865,7 @@ const MaterialsPanel: React.FC<{ data: any; editable: boolean; isRemediation?: b
 // ============================================================
 // 评审人与意见面板
 // ============================================================
-const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: boolean; onRefresh: () => void; currentUser: { uuid: string; name: string } }> = ({ data, editable, isReviewing, onRefresh, currentUser }) => {
+const ReviewersPanel: React.FC<{ data: any; projectUuid: string; projectName: string; editable: boolean; isReviewing: boolean; onRefresh: () => void; currentUser: { uuid: string; name: string } }> = ({ data, projectUuid, projectName, editable, isReviewing, onRefresh, currentUser }) => {
     const reviewers = data.reviewers || []
     const [roles, setRoles] = useState<any[]>([])
     const [selected, setSelected] = useState<Record<string, string>>({})
@@ -1833,6 +1873,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
     const [reviewerDirty, setReviewerDirty] = useState(false)
     const [savingReviewers, setSavingReviewers] = useState(false)
     const [publisherRole, setPublisherRole] = useState('')
+    const [messageDialog, setMessageDialog] = useState<{ title: string; message: string; detail?: string } | null>(null)
     const reviewType = (data.review?.review_type || 'dcp')
 
     // 解析冻结的 Profile 快照，构建角色约束
@@ -1923,6 +1964,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
     }, [roles, editable])
 
     async function saveReviewers() {
+      setMessageDialog(null)
       // 客户端校验：必投或否决权角色必须选择评审人
       const missingRequired: string[] = []
       for (const role of roles) {
@@ -1931,7 +1973,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
         }
       }
       if (missingRequired.length > 0) {
-        alert(`以下角色为必选，请选择评审人：\n${missingRequired.join('、')}`)
+        setMessageDialog({ title: '请完善评审人', message: `以下角色为必选：${missingRequired.join('、')}` })
         return
       }
       // Profile 快照校验：single 角色不可更换默认人选
@@ -1941,7 +1983,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
           if (!snap) continue
           const currentUuid = (selected[role.role_name] || '').trim()
           if (snap.mode === 'single' && snap.default_reviewer_uuid && currentUuid && currentUuid !== snap.default_reviewer_uuid) {
-            alert(`角色「${role.role_name}」绑定了指定评审人，不可更换为其他人`)
+            setMessageDialog({ title: '无法更换默认评审人', message: `角色「${role.role_name}」已由 Profile 锁定默认人选。` })
             return
           }
         }
@@ -1949,7 +1991,11 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
       const list = Object.entries(selected).filter(([, uid]) => uid.trim()).map(([role, uid]) => ({ role_name: role, reviewer_uuid: uid }))
       setSavingReviewers(true)
       try {
-        const res = await api.updateReviewers(data.review.review_uuid, { reviewers: list, operator_uuid: currentUser.uuid }) as any
+        await api.ensureProjectMembers(projectUuid, list.map(item => item.reviewer_uuid))
+        const res = await api.updateReviewers(data.review.review_uuid, {
+          reviewers: list,
+          operator_uuid: currentUser.uuid,
+        }) as any
         if (!res?.ok && !res?.data?.ok) {
           throw new Error(res?.error || res?.data?.error || '保存失败')
         }
@@ -1963,12 +2009,33 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
             const savedRoles = new Set(savedReviewers.map((r: any) => r.role_name))
             const missing = list.filter(r => !savedRoles.has(r.role_name)).map(r => r.role_name)
             if (missing.length > 0) {
-              alert(`评审人保存后刷新校验异常，缺失角色：${missing.join('、')}\n请重新打开编辑并保存。`)
+              setMessageDialog({
+                title: '保存结果异常',
+                message: `刷新后缺失角色：${missing.join('、')}`,
+                detail: '请重新打开评审人编辑并再次保存。',
+              })
             }
           } catch {}
         }, 1200)
       } catch (e: any) {
-        alert(e?.message || e?.data?.error || '保存失败')
+        const errorData = e?.data || {}
+        if (errorData.code === 'PROJECT_MEMBER_ADD_FAILED') {
+          let memberName = nameMap[errorData.user_uuid] || ''
+          if (!memberName && errorData.user_uuid) {
+            try {
+              const names = await api.resolveReviewerNames([errorData.user_uuid])
+              memberName = names[errorData.user_uuid] || ''
+            } catch {}
+          }
+          if (!memberName || memberName === errorData.user_uuid) memberName = '所选成员'
+          setMessageDialog({
+            title: '无法添加项目成员',
+            message: `无法自动将成员「${memberName}」加入项目「${projectName || '当前项目'}」。`,
+            detail: '请先在项目成员中手动添加该成员，再重新保存评审人。',
+          })
+        } else {
+          setMessageDialog({ title: '保存评审人失败', message: e?.message || errorData.error || '保存失败' })
+        }
         onRefresh()
       } finally {
         setSavingReviewers(false)
@@ -2087,7 +2154,7 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                     {reviewers.map((r: any, i: number) => (
                       <tr key={i}>
                         <td style={{ ...S.td, fontWeight: 500 }}>{r.role_name}</td>
-                        <td style={S.td}>{nameMap[r.reviewer_uuid] || r.reviewer_uuid || '-'}</td>
+                        <td style={S.td}>{r.reviewer_uuid ? (nameMap[r.reviewer_uuid] || '未知成员') : '-'}</td>
                         <td style={{ ...S.td, textAlign: 'center' }}>{r.conclusion ? CONCLUSION_LABELS[r.conclusion] || r.conclusion : '-'}</td>
                         <td style={{ ...S.td, textAlign: 'center' }}>{r.risk_level === 'low' ? '低' : r.risk_level === 'medium' ? '中' : r.risk_level === 'high' ? '高' : r.submitted_at > 0 ? (r.risk_level || '中') : '—'}</td>
                         <td style={{ ...S.td, fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.opinion_summary || '-'}</td>
@@ -2104,6 +2171,14 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
             </>
           )}
         </div>
+        {messageDialog && (
+          <PluginMessageDialog
+            title={messageDialog.title}
+            message={messageDialog.message}
+            detail={messageDialog.detail}
+            onClose={() => setMessageDialog(null)}
+          />
+        )}
       </div>
     )
 }
@@ -2495,7 +2570,7 @@ const AuditPanel: React.FC<{ reviewUuid: string }> = ({ reviewUuid }) => {
             {logs.map((l: any, i: number) => (
               <tr key={i}>
                 <td style={{ ...S.td, fontSize: 12, color: '#999' }}>{l.timestamp ? new Date(l.timestamp).toLocaleString('zh-CN') : '-'}</td>
-                <td style={{ ...S.td, fontSize: 11 }}>{nameMap[l.operator_uuid] || l.operator_uuid || '-'}</td>
+                <td style={{ ...S.td, fontSize: 11 }}>{l.operator_uuid ? (nameMap[l.operator_uuid] || '未知用户') : '-'}</td>
                 <td style={S.td}>{ACTION_LABELS[l.action] || l.action}</td>
                 <td style={{ ...S.td, fontSize: 12 }}>{l.detail}</td>
                 <td style={{ ...S.td, textAlign: 'center' }}>

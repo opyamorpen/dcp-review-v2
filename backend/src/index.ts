@@ -1206,7 +1206,17 @@ export async function createReview(req: any): Promise<PluginResponse> {
     Logger.info(`[DCP] auto-apply profile failed for ${rvUuid}: ${e?.message || e}`)
   }
 
-  return { body: { review_uuid: rvUuid, review_number: reviewNumber, materials_count: mats.length, indicators_count: inds.length, auto_applied_profile: autoAppliedProfile || undefined, auto_applied_count: autoAppliedCount || undefined } }
+  return { body: {
+    review_uuid: rvUuid,
+    review_number: reviewNumber,
+    materials_count: mats.length,
+    indicators_count: inds.length,
+    auto_applied_profile: autoAppliedProfile || undefined,
+    auto_applied_count: autoAppliedCount || undefined,
+    auto_reviewer_uuids: autoAppliedCount > 0
+      ? (await qAll(rvReviewer, (v: any) => v.review_uuid === rvUuid)).map((v: any) => v.reviewer_uuid).filter(Boolean)
+      : undefined,
+  } }
 }
 
 // ============================================================
@@ -2734,17 +2744,6 @@ export async function updateReviewers(req: any): Promise<PluginResponse> {
     }
     if (publisherEntries.length > 1) {
       return { body: { error: `决议角色「${publisherRole}」只能指定 1 名评审人` }, statusCode: 400 }
-    }
-  }
-
-  const teamUUID = getParam(req, 'team_uuid') || getParam(req, 'teamUUID') || ''
-  const projectUUID = (rv as any).project_uuid || ''
-  if (teamUUID && projectUUID) {
-    for (const r of normalized) {
-      const ensureErr = await ensureProjectMemberBestEffort(teamUUID, projectUUID, r.reviewer_uuid)
-      if (ensureErr) {
-        return { body: { error: ensureErr }, statusCode: 400 }
-      }
     }
   }
 
@@ -4619,34 +4618,6 @@ async function writeReviewersToEntities(rvUuid: string, reviewers: ReviewerAssig
   return savedPayload
 }
 
-async function ensureProjectMemberBestEffort(teamUUID: string, projectUUID: string, userUUID: string): Promise<string> {
-  if (!teamUUID || !projectUUID || !userUUID) return ''
-  const attempts = [
-    { url: `/project/api/project/team/${teamUUID}/project/${projectUUID}/members/add`, body: { user_uuids: [userUUID] } },
-    { url: `/project/api/project/team/${teamUUID}/project/${projectUUID}/members`, body: { user_uuids: [userUUID] } },
-    { url: `/project/api/project/team/${teamUUID}/project/${projectUUID}/members`, body: { members: [{ uuid: userUUID }] } },
-    { url: `/project/api/project/team/${teamUUID}/project/${projectUUID}/member/add`, body: { user_uuid: userUUID } },
-  ]
-  for (const attempt of attempts) {
-    try {
-      const res: any = await OPFetch(attempt.url, {
-        method: 'POST',
-        teamUUID,
-        headers: { 'Content-Type': 'application/json' },
-        data: attempt.body,
-      })
-      const ok = res?.code === 200 || res?.statusCode === 200 || res?.success === true || res?.ok === true || res?.data
-      if (ok) return ''
-      const msg = typeof res === 'string' ? res : JSON.stringify(res || {})
-      if (/已存在|exists|already/i.test(msg)) return ''
-    } catch (e: any) {
-      const msg = e?.message || String(e || '')
-      if (/已存在|exists|already/i.test(msg)) return ''
-    }
-  }
-  return `无法自动将用户 ${userUUID} 加入项目 ${projectUUID}，请先手动加入后再保存评审人`
-}
-
 // 校验角色分配中同一用户是否担任多个角色（single 模式 default 互查 + pool 候选去重）
 function validateRoleAssignmentsNoDupUsers(roleAssignments: any[]): string | null {
   const uuidToRoles: Record<string, string[]> = {}
@@ -4806,8 +4777,7 @@ export async function deleteReviewerProfile(req: any): Promise<PluginResponse> {
   // 检查是否有项目绑定引用此 Profile
   const bindings = await qAll(projectBinding, (v: any) => v.profile_id === pid)
   if (bindings.length > 0) {
-    const projectIds = [...new Set(bindings.map((b: any) => b.project_uuid))].join(', ')
-    return { body: { error: `此 Profile 已被 ${bindings.length} 个项目绑定（项目: ${projectIds}），请先解除绑定再删除` }, statusCode: 400 }
+    return { body: { error: `此 Profile 已被 ${bindings.length} 个项目绑定，请先解除绑定再删除` }, statusCode: 400 }
   }
   await reviewerProfile.delete(pid)
   Logger.info(`[DCP] ReviewerProfile deleted: ${pid}`)
