@@ -39,17 +39,8 @@ jobs:
           NPM_CONFIG_REGISTRY: https://registry.npmmirror.com/
         run: npm ci --ignore-scripts --legacy-peer-deps
 
-      - name: Initialize ONES plugin workspace
-        run: npx op init
-
       - name: Type-check backend
         run: npx tsc -p backend/tsconfig.json --noEmit
 
       - name: Type-check frontend
         run: npx tsc -p web/tsconfig.json --noEmit
-
-      - name: Clear build caches
-        run: rm -rf node_modules/.cache web/dist
-
-      - name: Package plugin
-        run: npx op packup --bump no-modify

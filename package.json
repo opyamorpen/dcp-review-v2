@@ -62,6 +62,8 @@
     "@ones-op/node-types": "^1.0.0",
     "@ones-op/node-utils": "^1.0.0",
     "@ones-op/router": "^1.0.0",
+    "@ones-op/rc-kilo": "1.70.34",
+    "@ones-op/rc-tera": "1.70.34",
     "@ones-op/utils": "^1.0.0",
     "react": "~17.0.2",
     "react-dom": "~17.0.2",
