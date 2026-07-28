@@ -178,6 +178,9 @@ const App: React.FC = () => {
               if (realIdentifier) setProjectKey(realIdentifier)
               const realUuid = exch.project_uuid || ''
               if (realUuid) {
+                // 评审绑定按项目真实 UUID 保存；URL 中的项目编码仅用于路由展示。
+                setProjectUuid(realUuid)
+                loadList(realUuid)
                 return fetch(`/project/api/project/team/${tuid}/project/${realUuid}/stamps/data?t=project`, {
                   method: 'POST', credentials: 'include',
                   headers: { 'Content-Type': 'application/json' },

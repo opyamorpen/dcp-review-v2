@@ -1091,13 +1091,20 @@ const ReviewerProfilesPanel: React.FC<{
   }
 
   function updateAssignment(roleName: string, patch: Partial<Assignment>) {
-    setProfileForm(prev => ({
-      ...prev,
-      assignments: {
-        ...prev.assignments,
-        [roleName]: { ...prev.assignments[roleName], ...patch },
-      },
-    }))
+    setProfileForm(prev => {
+      const current = prev.assignments[roleName] || {
+        mode: 'single' as const,
+        default_reviewer_uuid: '',
+        candidate_uuids: [],
+      }
+      return {
+        ...prev,
+        assignments: {
+          ...prev.assignments,
+          [roleName]: { ...current, ...patch },
+        },
+      }
+    })
   }
 
   function toggleCandidate(roleName: string, uuid: string) {
@@ -1413,13 +1420,14 @@ const CandidatePoolPicker: React.FC<{
   onToggle: (uid: string) => void
   forceDropUp?: boolean
 }> = ({ selected, members, onToggle, forceDropUp = false }) => {
+  const selectedUuids = Array.isArray(selected) ? selected : []
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [dropUp, setDropUp] = useState(false)
   const ref = React.useRef<HTMLDivElement>(null)
   const keyword = query.trim().toLowerCase()
   const filtered = keyword
-    ? members.filter(m => !selected.includes(m.uuid) && (m.name.toLowerCase().includes(keyword) || m.email.toLowerCase().includes(keyword))).slice(0, 30)
+    ? members.filter(m => !selectedUuids.includes(m.uuid) && (m.name.toLowerCase().includes(keyword) || m.email.toLowerCase().includes(keyword))).slice(0, 30)
     : []
 
   useEffect(() => {
@@ -1437,7 +1445,7 @@ const CandidatePoolPicker: React.FC<{
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
-        {selected.length === 0 ? <span style={{ color: '#999', fontSize: 12 }}>尚未选择候选人</span> : selected.map(uid => {
+        {selectedUuids.length === 0 ? <span style={{ color: '#999', fontSize: 12 }}>尚未选择候选人</span> : selectedUuids.map(uid => {
           const m = members.find(x => x.uuid === uid)
           return (
             <span key={uid} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, background: '#e6f4ff', color: '#1677ff', fontSize: 12 }}>

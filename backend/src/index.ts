@@ -4567,19 +4567,15 @@ function resolveAutoReviewers(roleAssignments: any[], roleTemplates: any[]): Rev
   const autoReviewers: ReviewerAssignmentRow[] = []
   for (const ra of normalizeRoleAssignments(roleAssignments)) {
     if (!ra.role_name || !roleNames.has(ra.role_name)) continue
-    const candidateUuids = ra.mode === 'pool'
-      ? ra.candidate_uuids
-      : (ra.default_reviewer_uuid ? [ra.default_reviewer_uuid] : [])
+    // 候选池只是可选范围，在发起人真正选择成员前不创建空评审人实体。
+    if (ra.mode !== 'single' || !ra.default_reviewer_uuid) continue
     autoReviewers.push({
       role_name: ra.role_name,
-      reviewer_uuid: ra.mode === 'single' ? (ra.default_reviewer_uuid || '') : '',
-      selection_mode: ra.mode,
-      default_reviewer_uuid: ra.default_reviewer_uuid || '',
-      candidate_uuids_json: JSON.stringify(candidateUuids),
+      reviewer_uuid: ra.default_reviewer_uuid,
+      selection_mode: 'single',
+      default_reviewer_uuid: ra.default_reviewer_uuid,
+      candidate_uuids_json: JSON.stringify([ra.default_reviewer_uuid]),
     })
-    if (ra.mode === 'single' && !ra.default_reviewer_uuid) {
-      continue
-    }
   }
   return autoReviewers
 }
