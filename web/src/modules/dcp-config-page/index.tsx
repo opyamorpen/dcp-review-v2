@@ -51,7 +51,7 @@ const S: Record<string, any> = {
  saveBar: { position: 'fixed' as any, bottom: 0, left: 160, right: 0, padding: '10px 20px', background: '#fff', borderTop: '1px solid #e8e8e8', display: 'flex', gap: 12, alignItems: 'center', zIndex: 10 },
  btn: (p: boolean, d = false) => ({ padding: '6px 20px', borderRadius: 4, border: 'none', cursor: d ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 500, background: p ? '#1677ff' : '#f0f0f0', color: p ? '#fff' : '#333', opacity: d ? 0.6 : 1 }),
  card: { padding: 16, border: '1px solid #e8e8e8', borderRadius: 6, background: '#fff' },
- table: { width: '100%', borderCollapse: 'separate', borderSpacing: 0, border: '1px solid #e8e8e8', borderRadius: 6, overflow: 'hidden', background: '#fff' },
+ table: { width: '100%', borderCollapse: 'separate', borderSpacing: 0, border: '1px solid #e8e8e8', borderRadius: 6, overflow: 'visible', background: '#fff' },
  th: { padding: '10px 14px', background: '#fafafa', borderBottom: '1px solid #e8e8e8', color: '#666', fontSize: 12, fontWeight: 600, textAlign: 'left', whiteSpace: 'nowrap' },
  td: { padding: '12px 14px', borderBottom: '1px solid #f0f0f0', verticalAlign: 'middle', color: '#333' },
 }
@@ -987,6 +987,12 @@ const ResolutionRuleConfig: React.FC<{ rules: any; roles: any[]; onChange: (v: a
 // ============================================================
 type ProjectOption = { uuid: string; name: string; identifier: string }
 
+function shouldDropUp(element: HTMLElement | null, estimatedHeight: number): boolean {
+  if (!element || typeof window === 'undefined') return false
+  const rect = element.getBoundingClientRect()
+  return window.innerHeight - rect.bottom < estimatedHeight + 16 && rect.top > estimatedHeight + 16
+}
+
 const ReviewerProfilesPanel: React.FC<{
   profiles: any[]
   projectBindings: any[]
@@ -1351,7 +1357,7 @@ const ReviewerProfilesPanel: React.FC<{
             <th style={S.th}>默认值 / 候选池</th>
           </tr></thead>
           <tbody>
-            {roles.map((role: any) => {
+            {roles.map((role: any, roleIndex: number) => {
               const ass = profileForm.assignments[role.role_name] || { mode: 'single', default_reviewer_uuid: '', candidate_uuids: [] }
               const isSingle = ass.mode !== 'pool'
               return (
@@ -1376,12 +1382,14 @@ const ReviewerProfilesPanel: React.FC<{
                         onChange={u => updateAssignment(role.role_name, { default_reviewer_uuid: u.uuid })}
                         placeholder="搜索默认评审人…"
                         allowedUserIds={members.map(m => m.uuid)}
+                        forceDropUp={roleIndex >= Math.max(0, roles.length - 2)}
                       />
                     ) : (
                       <CandidatePoolPicker
                         selected={ass.candidate_uuids}
                         members={members}
                         onToggle={uid => toggleCandidate(role.role_name, uid)}
+                        forceDropUp={roleIndex >= Math.max(0, roles.length - 2)}
                       />
                     )}
                   </td>
@@ -1403,9 +1411,11 @@ const CandidatePoolPicker: React.FC<{
   selected: string[]
   members: { uuid: string; name: string; email: string }[]
   onToggle: (uid: string) => void
-}> = ({ selected, members, onToggle }) => {
+  forceDropUp?: boolean
+}> = ({ selected, members, onToggle, forceDropUp = false }) => {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
+  const [dropUp, setDropUp] = useState(false)
   const ref = React.useRef<HTMLDivElement>(null)
   const keyword = query.trim().toLowerCase()
   const filtered = keyword
@@ -1440,12 +1450,12 @@ const CandidatePoolPicker: React.FC<{
       <input
         style={{ ...S.input, height: 34 }}
         value={query}
-        onFocus={() => { if (query.trim()) setOpen(true) }}
-        onChange={e => { setQuery(e.target.value); setOpen(!!e.target.value.trim()) }}
+        onFocus={() => { if (query.trim()) { setDropUp(forceDropUp || shouldDropUp(ref.current, 220)); setOpen(true) } }}
+        onChange={e => { setQuery(e.target.value); setDropUp(forceDropUp || shouldDropUp(ref.current, 220)); setOpen(!!e.target.value.trim()) }}
         placeholder="搜索姓名或邮箱添加候选人"
       />
       {open && keyword && (
-        <div style={{ position: 'absolute', zIndex: 40, left: 0, right: 0, maxHeight: 220, overflow: 'auto', border: '1px solid #d9d9d9', borderRadius: 4, marginTop: 4, background: '#fff', boxShadow: '0 6px 18px rgba(0,0,0,0.12)' }}>
+        <div style={{ position: 'absolute', zIndex: 40, left: 0, right: 0, maxHeight: 220, overflow: 'auto', border: '1px solid #d9d9d9', borderRadius: 4, marginTop: dropUp ? 0 : 4, marginBottom: dropUp ? 4 : 0, top: dropUp ? 'auto' : '100%', bottom: dropUp ? 'calc(100% + 4px)' : 'auto', background: '#fff', boxShadow: '0 6px 18px rgba(0,0,0,0.12)' }}>
           {filtered.length === 0 ? <div style={{ padding: '10px 12px', color: '#999' }}>无匹配成员</div> : filtered.map(m => (
             <div
               key={m.uuid}
@@ -1546,9 +1556,12 @@ const UserPicker: React.FC<{
   displayName?: string
   allowedUserIds?: string[]
   members: { uuid: string; name: string; email: string }[]
-}> = ({ value, onChange, placeholder = '搜索用户姓名或邮箱…', displayName, allowedUserIds, members }) => {
+  forceDropUp?: boolean
+}> = ({ value, onChange, placeholder = '搜索用户姓名或邮箱…', displayName, allowedUserIds, members, forceDropUp = false }) => {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
+  const [dropUp, setDropUp] = useState(false)
+  const ref = React.useRef<HTMLDivElement>(null)
   const allowedSet = React.useMemo(() => allowedUserIds && allowedUserIds.length > 0 ? new Set(allowedUserIds) : null, [allowedUserIds])
   const filtered = React.useMemo(() => {
     const base = allowedSet ? members.filter(m => allowedSet.has(m.uuid)) : members
@@ -1574,17 +1587,17 @@ const UserPicker: React.FC<{
   }
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div ref={ref} style={{ position: 'relative' }}>
       <input
         style={S.input}
         value={query}
-        onChange={e => { setQuery(e.target.value); setOpen(true) }}
-        onFocus={() => setOpen(true)}
+        onChange={e => { setQuery(e.target.value); setDropUp(forceDropUp || shouldDropUp(ref.current, 220)); setOpen(true) }}
+        onFocus={() => { setDropUp(forceDropUp || shouldDropUp(ref.current, 220)); setOpen(true) }}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
         placeholder={placeholder}
       />
       {open && filtered.length > 0 && (
-        <div style={{ position: 'absolute', zIndex: 20, left: 0, right: 0, maxHeight: 220, overflow: 'auto', background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4, marginTop: 4, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
+        <div style={{ position: 'absolute', zIndex: 20, left: 0, right: 0, maxHeight: 220, overflow: 'auto', top: dropUp ? 'auto' : '100%', bottom: dropUp ? 'calc(100% + 4px)' : 'auto', background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4, marginTop: dropUp ? 0 : 4, marginBottom: dropUp ? 4 : 0, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
           {filtered.map(m => (
             <div
               key={m.uuid}
