@@ -1041,10 +1041,12 @@ export async function createReview(req: any): Promise<PluginResponse> {
   const rvUuid = makeUuid()
   const now = Date.now()
   const reviewType = review_type || 'dcp'
+  const projectAliases = Array.isArray(b.project_aliases) ? b.project_aliases.filter(Boolean).map(String) : []
+  const projectLookupIds = new Set([project_uuid, ...projectAliases])
 
   // 校验：同项目同阶段同类型已有决议通过（pass / conditional_pass）的评审单时，禁止重复发起
   const existingRvs = await qAll(review, (v: any) =>
-    v.project_uuid === project_uuid &&
+    projectLookupIds.has(v.project_uuid) &&
     v.phase_code === phase_code &&
     (v.review_type || 'dcp') === reviewType &&
     v.status === 'completed'
@@ -1317,7 +1319,7 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
 
   await review.set(newRid, cleanForSet({
     review_uuid: newRid,
-    project_uuid: srcRv.project_uuid,
+    project_uuid: b.project_uuid || srcRv.project_uuid,
     phase_code: srcRv.phase_code,
     review_title: srcRv.review_title || 'DCP评审',
     meeting_time: 0,
@@ -1507,7 +1509,9 @@ export async function listReviewsByProject(req: any): Promise<PluginResponse> {
   const puid = getParam(req, 'project_uuid')
   const rvType = getParam(req, 'review_type') || ''
   if (!puid) return { body: { error: '缺少 project_uuid' }, statusCode: 400 }
-  let rvs = await qAll(review, (v: any) => v.project_uuid === puid && (!rvType || (v.review_type || 'dcp') === rvType))
+  const projectAliases = getParam(req, 'project_aliases').split(',').map(v => v.trim()).filter(Boolean)
+  const projectLookupIds = new Set([puid, ...projectAliases])
+  let rvs = await qAll(review, (v: any) => projectLookupIds.has(v.project_uuid) && (!rvType || (v.review_type || 'dcp') === rvType))
   // 补充阶段名称映射
   const allPhases = await qAll(phaseTpl)
   const phMap = new Map(allPhases.map((p: any) => [p.phase_code, p.phase_name]))
@@ -1568,7 +1572,7 @@ export async function listReviewsByProject(req: any): Promise<PluginResponse> {
   }))
   enriched.sort((a: any, b: any) => (b.created_at || 0) - (a.created_at || 0))
   // 返回已通过阶段列表（决议为 pass/conditional_pass，供前端依赖检查）
-  const allProjReviews = await qAll(review, (v: any) => v.project_uuid === puid)
+  const allProjReviews = await qAll(review, (v: any) => projectLookupIds.has(v.project_uuid))
   const passedPhases: string[] = []
   for (const r of allProjReviews) {
     const res = await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)
@@ -2000,6 +2004,7 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
 export async function startReview(req: any): Promise<PluginResponse> {
   try {
   const rid = getParam(req, 'review_uuid')
+  const b = (req.body || {}) as any
   if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
@@ -2015,7 +2020,9 @@ export async function startReview(req: any): Promise<PluginResponse> {
   const phaseTplRow = await qAll(phaseTpl, (v: any) => v.phase_code === (rv as any).phase_code && (v.review_type || 'dcp') === reviewType)
   const deps = jsonArr(phaseTplRow[0]?.dependencies || '[]')
   if (deps.length) {
-    const projReviews = await qAll(review, (v: any) => v.project_uuid === (rv as any).project_uuid)
+    const projectAliases = Array.isArray(b.project_aliases) ? b.project_aliases.filter(Boolean).map(String) : []
+    const projectLookupIds = new Set([(rv as any).project_uuid, ...projectAliases])
+    const projReviews = await qAll(review, (v: any) => projectLookupIds.has(v.project_uuid))
     const passedPhases = new Set<string>()
     for (const r of projReviews) {
       if (!deps.includes(r.phase_code)) continue

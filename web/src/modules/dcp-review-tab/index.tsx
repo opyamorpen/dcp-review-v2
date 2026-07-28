@@ -105,6 +105,7 @@ const S: Record<string, any> = {
 // ============================================================
 const App: React.FC = () => {
   const [projectUuid, setProjectUuid] = useState('')
+  const [projectAliases, setProjectAliases] = useState<string[]>([])
   const [projectKey, setProjectKey] = useState('')
   const [projectName, setProjectName] = useState('')
   const [componentUuid, setComponentUuid] = useState('')
@@ -180,7 +181,8 @@ const App: React.FC = () => {
               if (realUuid) {
                 // 评审绑定按项目真实 UUID 保存；URL 中的项目编码仅用于路由展示。
                 setProjectUuid(realUuid)
-                loadList(realUuid)
+                setProjectAliases(ck[1] !== realUuid ? [ck[1]] : [])
+                loadList(realUuid, undefined, [ck[1]])
                 return fetch(`/project/api/project/team/${tuid}/project/${realUuid}/stamps/data?t=project`, {
                   method: 'POST', credentials: 'include',
                   headers: { 'Content-Type': 'application/json' },
@@ -207,7 +209,7 @@ const App: React.FC = () => {
     if (!puid) {
       try { const m = document.referrer.match(/[?&]projectUUID=([^&]+)/); if (m) puid = m[1] } catch {}
     }
-    if (puid) { setProjectUuid(puid); loadList(puid) }
+    if (puid) { setProjectUuid(puid); setProjectAliases([puid]); loadList(puid) }
     else { setMsg('无法识别当前项目'); setLoading(false) }
     // 加载阶段配置 + IPD 流程图布局
     api.getPluginConfig().then((c: any) => {
@@ -226,13 +228,13 @@ const App: React.FC = () => {
     checkPermission('dcp_create_review').then(p => setHasCreatePerm(p))
   }, [])
 
-  async function loadList(puid: string, rvType?: string) {
+  async function loadList(puid: string, rvType?: string, aliases: string[] = projectAliases) {
     setLoading(true)
     setPage(1)
     const t = rvType || reviewType
     try {
       // 加载全部评审（用于 IPD 流程图），客户端按 tab 过滤列表
-      const data = await api.listReviewsByProject(puid)
+      const data = await api.listReviewsByProject(puid, undefined, aliases)
       const all = data.reviews || []
       setAllReviews(all)
       setReviews(all.filter((r: any) => (r.review_type || 'dcp') === t))
@@ -258,7 +260,7 @@ const App: React.FC = () => {
   async function handleCreate(form: any) {
     setMsg('')
     try {
-      const res = await api.createReview({ ...form, project_uuid: projectUuid, project_identifier: projectKey })
+      const res = await api.createReview({ ...form, project_uuid: projectUuid, project_identifier: projectKey, project_aliases: projectAliases })
       setSelectedReviewUuid(res.review_uuid)
       await loadDetail(res.review_uuid)
     } catch (e: any) { setMsg(`创建失败: ${e.message}`) }
@@ -266,13 +268,13 @@ const App: React.FC = () => {
 
   async function handleStart(rid: string) {
     setMsg('')
-    try { await api.startReview(rid, { operator_uuid: currentUser.uuid }); await loadDetail(rid) } catch (e: any) { setMsg(e.message) }
+    try { await api.startReview(rid, { operator_uuid: currentUser.uuid, project_aliases: projectAliases }); await loadDetail(rid) } catch (e: any) { setMsg(e.message) }
   }
 
   async function handleRecreate(rid: string) {
     setMsg('')
     try {
-      const res = await api.recreateReview(rid, { operator_uuid: currentUser.uuid, project_identifier: projectKey }) as any
+      const res = await api.recreateReview(rid, { operator_uuid: currentUser.uuid, project_uuid: projectUuid, project_identifier: projectKey }) as any
       await loadList(projectUuid)
       await loadDetail(res.review_uuid)
     } catch (e: any) { setMsg('重新发起失败: ' + (e.message || '未知错误')) }
@@ -547,6 +549,31 @@ const UserPicker: React.FC<{
 
       )}
     </div>
+  )
+}
+
+const CandidatePoolSelector: React.FC<{
+  roleName: string
+  candidateUuids: string[]
+  value: string
+  nameMap: Record<string, string>
+  allowEmpty: boolean
+  onChange: (uuid: string) => void
+}> = ({ roleName, candidateUuids, value, nameMap, allowEmpty, onChange }) => {
+  if (candidateUuids.length === 0) {
+    return <div style={{ color: '#ff4d4f', fontSize: 12 }}>此角色的候选池为空，请先完善 Profile 配置</div>
+  }
+
+  return (
+    <select
+      aria-label={`${roleName}评审人`}
+      value={value}
+      onChange={event => onChange(event.target.value)}
+      style={{ ...S.select, width: '100%', maxWidth: 240, height: 32, background: '#fff' }}
+    >
+      <option value="" disabled={!allowEmpty}>{allowEmpty ? '暂不选择' : '请选择评审人'}</option>
+      {candidateUuids.map(uuid => <option key={uuid} value={uuid}>{nameMap[uuid] || uuid}</option>)}
+    </select>
   )
 }
 
@@ -1883,24 +1910,40 @@ const ReviewersPanel: React.FC<{ data: any; editable: boolean; isReviewing: bool
                             <td style={S.td}>
                               {(() => {
                                 const restriction = getRoleRestriction(role.role_name)
+                                const snapshot = profileSnapshot?.[role.role_name]
+                                const setRoleReviewer = (uuid: string) => {
+                                  setSelected(prev => ({ ...prev, [role.role_name]: uuid }))
+                                  setReviewerDirty(true)
+                                }
                                 return (
                                   <>
-                                    <UserPicker
-                                      value={selected[role.role_name] || ''}
-                                      displayName={nameMap[selected[role.role_name] || '']}
-                                      onChange={u => { setSelected({ ...selected, [role.role_name]: u.uuid }); setReviewerDirty(true) }}
-                                      placeholder={isRequired || isPublisher ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'}
-                                      allowedUserIds={restriction.allowedUserIds}
-                                    />
+                                    {snapshot?.mode === 'pool' ? (
+                                      <CandidatePoolSelector
+                                        roleName={role.role_name}
+                                        candidateUuids={snapshot.candidate_uuids}
+                                        value={selected[role.role_name] || ''}
+                                        nameMap={nameMap}
+                                        allowEmpty={!isRequired && !isPublisher}
+                                        onChange={setRoleReviewer}
+                                      />
+                                    ) : (
+                                      <UserPicker
+                                        value={selected[role.role_name] || ''}
+                                        displayName={nameMap[selected[role.role_name] || '']}
+                                        onChange={u => setRoleReviewer(u.uuid)}
+                                        placeholder={isRequired || isPublisher ? '搜索评审人…（必选）' : '搜索评审人…（可不选）'}
+                                        allowedUserIds={restriction.allowedUserIds}
+                                      />
+                                    )}
                                     {isPublisher && !selected[role.role_name] && <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>决议角色必须指定 1 名人员</div>}
                                     {restriction.allowedUserIds && restriction.allowedUserIds.length === 0 && (
                                       <div style={{ fontSize: 11, color: '#ff4d4f', marginTop: 2 }}>此角色的 Profile 设置了单人模式但未指定默认评审人</div>
                                     )}
-                                    {profileSnapshot?.[role.role_name]?.mode === 'single' && profileSnapshot[role.role_name].default_reviewer_uuid && (
+                                    {snapshot?.mode === 'single' && snapshot.default_reviewer_uuid && (
                                       <div style={{ fontSize: 11, color: '#1677ff', marginTop: 2 }}>已由 Profile「{data.review?.reviewer_profile_name || ''}」锁定默认人选</div>
                                     )}
-                                    {profileSnapshot?.[role.role_name]?.mode === 'pool' && (
-                                      <div style={{ fontSize: 11, color: '#1677ff', marginTop: 2 }}>候选池模式 — 仅可从预设候选人中选择</div>
+                                    {snapshot?.mode === 'pool' && snapshot.candidate_uuids.length > 0 && (
+                                      <div style={{ fontSize: 11, color: '#1677ff', marginTop: 6 }}>候选池模式，仅可单选以上成员</div>
                                     )}
                                   </>
                                 )

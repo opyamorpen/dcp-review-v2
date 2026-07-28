@@ -98,7 +98,14 @@ export async function searchUsers(keyword: string): Promise<{ uuid: string; name
 // ---- 评审单 ----
 export const createReview = (data: any) => callApi('/dcp/review', { method: 'POST', body: JSON.stringify(data) })
 export const getReviewDetail = (uuid: string) => callApi(`/dcp/review/${uuid}`)
-export const listReviewsByProject = (puuid: string, reviewType?: string) => callApi(`/dcp/reviews/by-project/${puuid}${reviewType ? `?review_type=${reviewType}` : ''}`)
+export const listReviewsByProject = (puuid: string, reviewType?: string, projectAliases: string[] = []) => {
+  const params = new URLSearchParams()
+  if (reviewType) params.set('review_type', reviewType)
+  const aliases = [...new Set(projectAliases.filter(alias => alias && alias !== puuid))]
+  if (aliases.length > 0) params.set('project_aliases', aliases.join(','))
+  const query = params.toString()
+  return callApi(`/dcp/reviews/by-project/${puuid}${query ? `?${query}` : ''}`)
+}
 export const listTeamReviews = () => callApi('/dcp/reviews/team')
 export const startReview = (uuid: string, data?: any) => callApi(`/dcp/review/${uuid}/start`, { method: 'POST', body: JSON.stringify(data || {}) })
 export const recallReview = (uuid: string, data?: any) => callApi(`/dcp/review/${uuid}/recall`, { method: 'POST', body: JSON.stringify(data || {}) })
