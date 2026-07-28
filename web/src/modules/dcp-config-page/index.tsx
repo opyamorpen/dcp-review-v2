@@ -1312,7 +1312,7 @@ const ReviewerProfilesPanel: React.FC<{
                       <div style={{ fontWeight: 500 }}>{projects.find(p => p.uuid === b.project_uuid || p.identifier === b.project_uuid)?.name || b.project_name || b.project_identifier || b.project_uuid}</div>
                       {projects.find(p => p.uuid === b.project_uuid || p.identifier === b.project_uuid)?.identifier && <div style={{ color: '#999', fontSize: 11, marginTop: 2 }}>{projects.find(p => p.uuid === b.project_uuid || p.identifier === b.project_uuid)?.identifier}</div>}
                     </td>
-                    <td style={S.td}>{b.profile_name || b.profile_id}</td>
+                    <td style={S.td}>{profiles.find(p => p._key === b.profile_id)?.profile_name || b.profile_name || b.profile_id}</td>
                     <td style={S.td}>{(b.review_type || 'dcp').toUpperCase()}</td>
                     <td style={S.td}><button style={S.delBtn} onClick={() => handleDeleteBinding(b._key)}>删除</button></td>
                   </tr>
