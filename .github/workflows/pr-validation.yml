@@ -37,7 +37,7 @@ jobs:
       - name: Install dependencies
         env:
           NPM_CONFIG_REGISTRY: https://registry.npmmirror.com/
-        run: npm ci --ignore-scripts --legacy-peer-deps
+        run: npm install --ignore-scripts --legacy-peer-deps --no-audit --no-fund
 
       - name: Initialize ONES plugin workspace
         run: npx op init
