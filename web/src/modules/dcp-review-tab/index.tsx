@@ -579,6 +579,23 @@ const CandidatePoolSelector: React.FC<{
     return () => document.removeEventListener('mousedown', handleOutsideClick)
   }, [open])
 
+  if (value) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ fontSize: 13, fontWeight: 500, background: '#e6f4ff', padding: '2px 10px', borderRadius: 4 }}>
+          {nameMap[value] || '未知成员'}
+        </span>
+        <button
+          type="button"
+          onClick={() => { setOpen(false); onChange('') }}
+          aria-label={`清除${roleName}评审人`}
+          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#ff4d4f', fontSize: 16, padding: 0, lineHeight: 1 }}
+          title="清除"
+        >×</button>
+      </div>
+    )
+  }
+
   if (candidateUuids.length === 0) {
     return <div style={{ color: '#ff4d4f', fontSize: 12 }}>此角色的候选池为空，请先完善 Profile 配置</div>
   }
@@ -587,7 +604,7 @@ const CandidatePoolSelector: React.FC<{
     ...(allowEmpty ? [{ uuid: '', name: '暂不选择' }] : []),
     ...candidateUuids.map(uuid => ({ uuid, name: nameMap[uuid] || '未知成员' })),
   ]
-  const selectedName = value ? (nameMap[value] || '未知成员') : (allowEmpty ? '暂不选择' : '请选择评审人')
+  const selectedName = allowEmpty ? '暂不选择' : '请选择评审人'
 
   function toggleOpen() {
     if (!open && ref.current) {
