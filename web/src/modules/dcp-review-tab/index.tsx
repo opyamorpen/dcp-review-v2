@@ -560,20 +560,91 @@ const CandidatePoolSelector: React.FC<{
   allowEmpty: boolean
   onChange: (uuid: string) => void
 }> = ({ roleName, candidateUuids, value, nameMap, allowEmpty, onChange }) => {
+  const [open, setOpen] = useState(false)
+  const [dropUp, setDropUp] = useState(false)
+  const ref = React.useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handleOutsideClick(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [open])
+
   if (candidateUuids.length === 0) {
     return <div style={{ color: '#ff4d4f', fontSize: 12 }}>此角色的候选池为空，请先完善 Profile 配置</div>
   }
 
+  const options = [
+    ...(allowEmpty ? [{ uuid: '', name: '暂不选择' }] : []),
+    ...candidateUuids.map(uuid => ({ uuid, name: nameMap[uuid] || uuid })),
+  ]
+  const selectedName = value ? (nameMap[value] || value) : (allowEmpty ? '暂不选择' : '请选择评审人')
+
+  function toggleOpen() {
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect()
+      const menuHeight = Math.min(220, options.length * 40 + 8)
+      setDropUp(rect.bottom + menuHeight > window.innerHeight && rect.top > menuHeight)
+    }
+    setOpen(current => !current)
+  }
+
   return (
-    <select
-      aria-label={`${roleName}评审人`}
-      value={value}
-      onChange={event => onChange(event.target.value)}
-      style={{ ...S.select, width: '100%', maxWidth: 240, height: 32, background: '#fff' }}
-    >
-      <option value="" disabled={!allowEmpty}>{allowEmpty ? '暂不选择' : '请选择评审人'}</option>
-      {candidateUuids.map(uuid => <option key={uuid} value={uuid}>{nameMap[uuid] || uuid}</option>)}
-    </select>
+    <div ref={ref} style={{ position: 'relative', width: '100%', maxWidth: 240 }}>
+      <button
+        type="button"
+        aria-label={`${roleName}评审人`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={toggleOpen}
+        style={{
+          width: '100%', height: 34, padding: '0 10px', border: `1px solid ${open ? '#1677ff' : '#d9d9d9'}`,
+          borderRadius: 4, background: '#fff', color: value ? '#262626' : '#8c8c8c',
+          cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          boxShadow: open ? '0 0 0 2px rgba(22,119,255,0.12)' : 'none', textAlign: 'left',
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selectedName}</span>
+        <span aria-hidden="true" style={{ marginLeft: 12, color: '#8c8c8c', fontSize: 11, transform: open ? 'rotate(180deg)' : 'none' }}>▼</span>
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          aria-label={`${roleName}候选成员`}
+          style={{
+            position: 'absolute', zIndex: 1000, left: 0, right: 0, maxHeight: 220, overflowY: 'auto',
+            top: dropUp ? 'auto' : 'calc(100% + 4px)', bottom: dropUp ? 'calc(100% + 4px)' : 'auto',
+            background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4,
+            boxShadow: '0 6px 18px rgba(0,0,0,0.12)', padding: '4px 0',
+          }}
+        >
+          {options.map(option => {
+            const selected = option.uuid === value
+            return (
+              <div
+                key={option.uuid || '__empty__'}
+                role="option"
+                aria-selected={selected}
+                onClick={() => { onChange(option.uuid); setOpen(false) }}
+                style={{
+                  minHeight: 34, padding: '0 10px', cursor: 'pointer', display: 'flex', alignItems: 'center',
+                  justifyContent: 'space-between', gap: 12, fontSize: 13,
+                  color: option.uuid ? '#262626' : '#8c8c8c', background: selected ? '#e6f4ff' : '#fff',
+                }}
+                onMouseEnter={event => { if (!selected) event.currentTarget.style.background = '#f5f5f5' }}
+                onMouseLeave={event => { if (!selected) event.currentTarget.style.background = '#fff' }}
+              >
+                <span>{option.name}</span>
+                {selected && <span aria-hidden="true" style={{ color: '#1677ff', fontWeight: 600 }}>✓</span>}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
