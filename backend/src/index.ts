@@ -6,7 +6,7 @@
 // - Fixed reviewer-workspace exchange API path for project UUID resolution
 // ============================================================
 import { Logger } from '@ones-op/node-logger'
-import { storage } from '@ones-op/sdk/node'
+import { env, storage } from '@ones-op/sdk/node'
 import { PluginResponse } from '@ones-op/node-types'
 import { OPFetch, getOpenApiToken } from '@ones-op/fetch'
 import { Notify, NotifyWay } from '@ones-op/node-ability'
@@ -221,7 +221,324 @@ function getOperator(req: any): string {
   if (!req?.headers) return ''
   const h = req.headers
   // ONES 注入的请求头大小写不确定，全量兼容
-  return h['ones-user-id'] || h['Ones-User-Id'] || h['ONES-USER-ID'] || ''
+  const raw = h['ones-user-id'] || h['Ones-User-Id'] || h['ONES-USER-ID'] || ''
+  return Array.isArray(raw) ? String(raw[0] || '').trim() : String(raw).trim()
+}
+
+type PluginPermission = 'dcp_admin' | 'dcp_create_review' | 'dcp_view_review'
+type ApiPolicy =
+  | 'identity'
+  | 'admin'
+  | 'create'
+  | 'overview'
+  | 'self'
+  | 'project-read'
+  | 'review-read'
+  | 'review-creator'
+  | 'review-create-creator'
+  | 'review-contributor'
+  | 'review-participant'
+  | 'review-publisher'
+  | 'review-creator-or-publisher'
+
+type ApiHandler = (req: any) => Promise<PluginResponse>
+
+interface RequestAuthorizationCache {
+  permissions: Map<PluginPermission, boolean>
+  projectAccess: Map<string, boolean>
+}
+
+class AuthorizationServiceError extends Error {
+  readonly code: string
+
+  constructor(code: string, message: string) {
+    super(message)
+    this.name = 'AuthorizationServiceError'
+    this.code = code
+  }
+}
+
+const authorizationCache = new WeakMap<object, RequestAuthorizationCache>()
+
+function getAuthorizationCache(req: any): RequestAuthorizationCache {
+  if (!req || (typeof req !== 'object' && typeof req !== 'function')) {
+    return { permissions: new Map(), projectAccess: new Map() }
+  }
+  let cached = authorizationCache.get(req)
+  if (!cached) {
+    cached = { permissions: new Map(), projectAccess: new Map() }
+    authorizationCache.set(req, cached)
+  }
+  return cached
+}
+
+function getRequestHeader(req: any, name: string): string {
+  const headers = req?.headers || {}
+  const target = name.toLowerCase()
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== target) continue
+    return Array.isArray(value) ? String(value[0] || '') : String(value || '')
+  }
+  return ''
+}
+
+function getForwardedAuthenticationHeaders(req: any): Record<string, string> {
+  const headers: Record<string, string> = {}
+  const authToken = getRequestHeader(req, 'Ones-Auth-Token')
+  const cookie = getRequestHeader(req, 'Cookie')
+  if (authToken) headers['Ones-Auth-Token'] = authToken
+  if (cookie) headers.Cookie = cookie
+  if (!authToken && !cookie) {
+    throw new AuthorizationServiceError('AUTHENTICATION_CONTEXT_MISSING', '请求未携带可验证的 ONES 登录凭证')
+  }
+  return headers
+}
+
+function getTrustedRequestOrigin(req: any): string {
+  const forwardedHost = getRequestHeader(req, 'X-Forwarded-Host').split(',')[0].trim()
+  const forwardedProto = getRequestHeader(req, 'X-Forwarded-Proto').split(',')[0].trim().toLowerCase()
+  if (!forwardedHost || !/^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/.test(forwardedHost)) return ''
+  if (forwardedProto !== 'https' && forwardedProto !== 'http') return ''
+  return `${forwardedProto}://${forwardedHost}`
+}
+
+function authResponse(statusCode: 401 | 403 | 503, code: string, error: string): PluginResponse {
+  return { body: { code, error }, statusCode }
+}
+
+function logAuthorizationDenied(req: any, code: string, policy: ApiPolicy, detail = ''): void {
+  const path = String(req?.url || req?.path || '').split('?')[0].slice(0, 200)
+  const operator = getOperator(req) || 'anonymous'
+  const teamUUID = getParam(req, 'team_uuid') || getParam(req, 'teamUUID') || ''
+  Logger.info(`[DCP][AUTHZ_DENY] code=${code}, policy=${policy}, operator=${operator}, team=${teamUUID}, path=${path}${detail ? `, detail=${detail}` : ''}`)
+}
+
+async function getAuthorizationRuntime(req: any): Promise<{
+  teamUUID: string
+  organizationUUID: string
+  instanceId: string
+  platformApiHost: string
+}> {
+  const routeTeamUUID = getParam(req, 'team_uuid') || getParam(req, 'teamUUID') || ''
+  const [runtimeTeamUUID, organizationUUID, instanceId, platformApiHost] = await Promise.all([
+    env.getTeamUUID(),
+    env.getOrganizationUUID(),
+    env.getInstanceId(),
+    env.getPlatformAPIHost(),
+  ])
+  const teamUUID = routeTeamUUID || runtimeTeamUUID
+  if (!teamUUID || !organizationUUID || !instanceId || !platformApiHost) {
+    throw new AuthorizationServiceError('AUTHORIZATION_CONTEXT_INCOMPLETE', 'ONES 授权上下文不完整')
+  }
+  if (routeTeamUUID && runtimeTeamUUID && routeTeamUUID !== runtimeTeamUUID) {
+    throw new AuthorizationServiceError('AUTHORIZATION_TEAM_MISMATCH', '请求团队与运行时团队不一致')
+  }
+  return { teamUUID, organizationUUID, instanceId, platformApiHost }
+}
+
+function buildPlatformUrl(platformApiHost: string, path: string): string {
+  try {
+    return new URL(path, platformApiHost).toString()
+  } catch {
+    throw new AuthorizationServiceError('AUTHORIZATION_CONTEXT_INVALID', 'ONES 平台地址无效')
+  }
+}
+
+function authorizationRequestErrorCode(prefix: string, error: any): string {
+  const detail = error?.response?.status || error?.status || error?.code || 'UNKNOWN'
+  return `${prefix}_${String(detail).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 40)}`
+}
+
+function parsePermissionResult(response: any): boolean {
+  const payload = response?.data ?? response
+  const results = Array.isArray(payload?.data)
+    ? payload.data
+    : Array.isArray(payload?.body?.data)
+      ? payload.body.data
+      : Array.isArray(payload)
+        ? payload
+        : null
+  if (!results || results.length === 0 || typeof results[0]?.is_permission !== 'boolean') {
+    throw new AuthorizationServiceError('AUTHORIZATION_RESPONSE_INVALID', 'ONES 权限服务返回格式无效')
+  }
+  return results[0].is_permission === true
+}
+
+async function hasPluginPermission(req: any, permission: PluginPermission): Promise<boolean> {
+  const cache = getAuthorizationCache(req)
+  const cached = cache.permissions.get(permission)
+  if (cached !== undefined) return cached
+
+  const { teamUUID, organizationUUID, instanceId, platformApiHost } = await getAuthorizationRuntime(req)
+  const requestOrigin = getTrustedRequestOrigin(req) || platformApiHost
+  const authenticationHeaders = getForwardedAuthenticationHeaders(req)
+  try {
+    const response = await OPFetch(buildPlatformUrl(requestOrigin, '/project/api/project/plugin/permissionrule/batch_check'), {
+      method: 'POST',
+      headers: {
+        ...authenticationHeaders,
+        'Content-Type': 'application/json',
+        'Ones-Plugin-Id': 'built_in_apis',
+      },
+      data: {
+        permission_rules: [{
+          organization_uuid: organizationUUID,
+          team_uuid: teamUUID,
+          instance_id: instanceId,
+          permission_field: permission,
+          context: {},
+        }],
+      },
+    } as any)
+    const allowed = parsePermissionResult(response)
+    cache.permissions.set(permission, allowed)
+    return allowed
+  } catch (error: any) {
+    if (error instanceof AuthorizationServiceError) throw error
+    throw new AuthorizationServiceError(
+      authorizationRequestErrorCode('AUTHORIZATION_REQUEST_FAILED', error),
+      `ONES 权限服务不可用: ${error?.message || String(error)}`,
+    )
+  }
+}
+
+async function getReviewParticipants(rv: any): Promise<any[]> {
+  const rid = String((rv as any)?.review_uuid || '')
+  if (!rid) return []
+  const rows = await qAll(rvReviewer, (v: any) => v.review_uuid === rid)
+  return rows.length > 0 ? rows : jsonArr((rv as any).reviewers_json || '[]')
+}
+
+async function isReviewParticipant(rv: any, operator: string): Promise<boolean> {
+  if (!operator) return false
+  const participants = await getReviewParticipants(rv)
+  return participants.some((item: any) => item.reviewer_uuid === operator)
+}
+
+async function canAccessProject(req: any, projectKey: string): Promise<boolean> {
+  if (!projectKey) return false
+  const cache = getAuthorizationCache(req)
+  const cached = cache.projectAccess.get(projectKey)
+  if (cached !== undefined) return cached
+
+  const { teamUUID, platformApiHost } = await getAuthorizationRuntime(req)
+  const requestOrigin = getTrustedRequestOrigin(req) || platformApiHost
+  const authenticationHeaders = getForwardedAuthenticationHeaders(req)
+  try {
+    const meta = await resolveProjectMeta(teamUUID, projectKey)
+    const project = await findProjectByGraphQL(
+      teamUUID,
+      meta.project_real_uuid || projectKey,
+      meta.project_identifier || projectKey,
+      false,
+      authenticationHeaders,
+      requestOrigin,
+    )
+    const allowed = !!project
+    cache.projectAccess.set(projectKey, allowed)
+    return allowed
+  } catch (error: any) {
+    throw new AuthorizationServiceError(
+      authorizationRequestErrorCode('PROJECT_AUTHORIZATION_REQUEST_FAILED', error),
+      `ONES 项目权限校验不可用: ${error?.message || String(error)}`,
+    )
+  }
+}
+
+async function canReadReview(req: any, rv: any, operator: string): Promise<boolean> {
+  if ((rv as any).creator_uuid === operator || await isReviewParticipant(rv, operator)) return true
+
+  let dependencyError: AuthorizationServiceError | null = null
+  try {
+    if (await canAccessProject(req, String((rv as any).project_uuid || ''))) return true
+  } catch (error: any) {
+    dependencyError = error instanceof AuthorizationServiceError
+      ? error
+      : new AuthorizationServiceError('PROJECT_AUTHORIZATION_REQUEST_FAILED', String(error))
+  }
+
+  try {
+    if (await hasPluginPermission(req, 'dcp_view_review')) return true
+  } catch (error: any) {
+    dependencyError = error instanceof AuthorizationServiceError
+      ? error
+      : new AuthorizationServiceError('AUTHORIZATION_REQUEST_FAILED', String(error))
+  }
+
+  if (dependencyError) throw dependencyError
+  return false
+}
+
+async function authorizeApiRequest(req: any, policy: ApiPolicy): Promise<PluginResponse | null> {
+  const operator = getOperator(req)
+  if (!operator) {
+    logAuthorizationDenied(req, 'AUTHENTICATION_REQUIRED', policy)
+    return authResponse(401, 'AUTHENTICATION_REQUIRED', '无法确认当前登录用户身份')
+  }
+
+  try {
+    if (policy === 'identity' || policy === 'self') return null
+
+    const permissionByPolicy: Partial<Record<ApiPolicy, PluginPermission>> = {
+      admin: 'dcp_admin',
+      create: 'dcp_create_review',
+      overview: 'dcp_view_review',
+    }
+    const requiredPermission = permissionByPolicy[policy]
+    if (requiredPermission) {
+      if (await hasPluginPermission(req, requiredPermission)) return null
+      logAuthorizationDenied(req, 'PERMISSION_DENIED', policy, requiredPermission)
+      return authResponse(403, 'PERMISSION_DENIED', '没有执行此操作的权限')
+    }
+
+    if (policy === 'project-read') {
+      const projectUUID = getParam(req, 'project_uuid')
+      if (projectUUID && await canAccessProject(req, projectUUID)) return null
+      logAuthorizationDenied(req, 'PROJECT_ACCESS_DENIED', policy)
+      return authResponse(403, 'PROJECT_ACCESS_DENIED', '没有访问该项目的权限')
+    }
+
+    const reviewUUID = getParam(req, 'review_uuid')
+    if (!reviewUUID) return { body: { code: 'INVALID_REQUEST', error: '缺少 review_uuid' }, statusCode: 400 }
+    const rv = await review.get(reviewUUID)
+    if (!rv) return { body: { code: 'REVIEW_NOT_FOUND', error: '评审单不存在' }, statusCode: 404 }
+
+    let allowed = false
+    if (policy === 'review-read') {
+      allowed = await canReadReview(req, rv, operator)
+    } else if (policy === 'review-creator' || policy === 'review-create-creator') {
+      allowed = (rv as any).creator_uuid === operator
+      if (allowed && policy === 'review-create-creator') {
+        allowed = await hasPluginPermission(req, 'dcp_create_review')
+      }
+    } else if (policy === 'review-contributor' || policy === 'review-participant') {
+      allowed = await isReviewParticipant(rv, operator)
+      if (policy === 'review-contributor') allowed = allowed || (rv as any).creator_uuid === operator
+    } else if (policy === 'review-publisher') {
+      allowed = await isPublisherRole(rv, operator)
+    } else if (policy === 'review-creator-or-publisher') {
+      allowed = (rv as any).creator_uuid === operator || await isPublisherRole(rv, operator)
+    }
+
+    if (allowed) return null
+    logAuthorizationDenied(req, 'REVIEW_ACCESS_DENIED', policy, `review=${reviewUUID}`)
+    return authResponse(403, 'REVIEW_ACCESS_DENIED', '没有访问或操作该评审单的权限')
+  } catch (error: any) {
+    const message = error?.message || String(error)
+    Logger.error(`[DCP][AUTHZ_UNAVAILABLE] policy=${policy}, error=${message}`)
+    const code = error instanceof AuthorizationServiceError
+      ? error.code
+      : 'AUTHORIZATION_SERVICE_UNAVAILABLE'
+    return authResponse(503, code, '权限服务暂时不可用，请稍后重试')
+  }
+}
+
+function withAuthorization(policy: ApiPolicy, handler: ApiHandler): ApiHandler {
+  return async (req: any): Promise<PluginResponse> => {
+    const denied = await authorizeApiRequest(req, policy)
+    if (denied) return denied
+    return handler(req)
+  }
 }
 
 // ============================================================
@@ -234,13 +551,22 @@ export function UnInstall() { Logger.info('[DCP] UnInstall') }
 // ============================================================
 // 项目元数据解析（project_uuid → name/identifier/real_uuid）
 // ============================================================
-async function findProjectByGraphQL(teamUUID: string, realUUID: string, identifier: string): Promise<any> {
+async function findProjectByGraphQL(
+  teamUUID: string,
+  realUUID: string,
+  identifier: string,
+  root = true,
+  requestHeaders: Record<string, string> = {},
+  platformApiHost = '',
+): Promise<any> {
+  const path = `/project/api/project/team/${teamUUID}/items/graphql?t=dcp_project_meta`
   const gqlRes = await OPFetch(
-    `/project/api/project/team/${teamUUID}/items/graphql?t=dcp_project_meta`,
+    platformApiHost ? buildPlatformUrl(platformApiHost, path) : path,
     {
       method: 'POST',
+      root,
       teamUUID,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...requestHeaders, 'Content-Type': 'application/json' },
       data: {
         query: `{
           buckets(
@@ -954,8 +1280,6 @@ export async function getPluginConfig(_req: any): Promise<PluginResponse> {
     indicators: withType(await qAll(indTpl)),
     roles: withType(await qAll(roleTpl)),
     checklistItems: withType(await qAll(checkItem)),
-    reviewerProfiles: await qAll(reviewerProfile),
-    projectBindings: await qAll(projectBinding),
   }}
 }
 
@@ -1902,12 +2226,10 @@ export async function getDcpStats(req: any): Promise<PluginResponse> {
 // 我的评审（按评审人 UUID 筛选待办/已办）
 // ============================================================
 export async function listMyReviews(req: any): Promise<PluginResponse> {
-  // ONES external API 无 req.query，从 URL 解析
-  const url = req.url || ''
-  const qm = url.match(/[?&]reviewer_uuid=([^&]+)/)
-  const reviewerUuid = qm ? decodeURIComponent(qm[1]) : ((req.body || {}).reviewer_uuid || '')
+  // 始终使用网关注入的当前用户，忽略 query/body 中可伪造的 reviewer_uuid。
+  const reviewerUuid = getOperator(req)
   if (!reviewerUuid) {
-    return { body: { error: '缺少 reviewer_uuid' }, statusCode: 400 }
+    return { body: { code: 'AUTHENTICATION_REQUIRED', error: '无法确认当前登录用户身份' }, statusCode: 401 }
   }
   const allRvs = await qAll(review)
   const allPhases = await qAll(phaseTpl)
@@ -2785,53 +3107,6 @@ export async function updateReviewers(req: any): Promise<PluginResponse> {
   await writeAudit(rid, _rvOp || (req.body || {} as any).operator_uuid || '', '更新评审人', rid,
     `评审人已更新，共 ${savedPayload.length} 人`)
   return { body: { ok: true, saved_count: savedPayload.length, reviewers: savedPayload } }
-}
-
-// ============================================================
-// 诊断接口：直接读实体 key 验证存储行为
-// ============================================================
-export async function debugReviewerStorage(req: any): Promise<PluginResponse> {
-  const rid = getParam(req, 'review_uuid')
-  if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
-  const all = await qAll(rvReviewer)
-  const matched = all.filter((v: any) => v.review_uuid === rid)
-  const direct: any[] = []
-  for (let i = 0; i < 10; i++) {
-    const key = `${rid}_rvr_${i}`
-    const val = await rvReviewer.get(key)
-    direct.push({ key, value: val })
-  }
-  return { body: { rid, total_count: all.length, matched_count: matched.length, matched, direct } }
-}
-
-// ============================================================
-// 诊断接口：dump listMyReviews 原始数据
-// ============================================================
-export async function debugMyReviews(req: any): Promise<PluginResponse> {
-  const url = req.url || ''
-  const qm = url.match(/[?&]reviewer_uuid=([^&]+)/)
-  const reviewerUuid = qm ? decodeURIComponent(qm[1]) : ((req.body || {}).reviewer_uuid || '')
-  
-  const allRvs = await qAll(review)
-  const diag: any[] = []
-  for (const r of allRvs) {
-    const rvrs = await qAll(rvReviewer, (v: any) => v.review_uuid === r.review_uuid)
-    const my = rvrs.find((v: any) => v.reviewer_uuid === reviewerUuid)
-    diag.push({
-      review_uuid: r.review_uuid,
-      status: r.status,
-      phase_code: r.phase_code,
-      total_rvrs: rvrs.length,
-      rvr_uuids: rvrs.map((v: any) => v.reviewer_uuid),
-      matched: !!my,
-      my_submitted: my ? !!(my.submitted_at > 0) : null,
-    })
-  }
-  const passedFilter = diag.filter(d => {
-    const r = allRvs.find((v: any) => v.review_uuid === d.review_uuid)
-    return r && (r.status === 'reviewing' || r.status === 'completed' || r.status === 'rejected')
-  })
-  return { body: { reviewer_uuid: reviewerUuid, all_reviews: diag, passed_filter: passedFilter } }
 }
 
 // ============================================================
@@ -4890,6 +5165,13 @@ export async function applyProfileToReview(req: any): Promise<PluginResponse> {
   if (reviewType !== profileType) {
     return { body: { error: `Profile 类型（${profileType}）与评审单类型（${reviewType}）不匹配` }, statusCode: 400 }
   }
+  const bindings = await qAll(projectBinding, (item: any) =>
+    item.project_uuid === (rv as any).project_uuid &&
+    (item.review_type || 'dcp') === reviewType &&
+    item.profile_id === profile_id)
+  if (bindings.length === 0) {
+    return { body: { error: '只能应用当前项目已绑定的 Profile' }, statusCode: 403 }
+  }
   const roleTemplates = await getRoleTemplatesForReview(rv)
   const snapshotReviewers = resolveAutoReviewers(roleAssignments, roleTemplates)
   let savedPayload: any[] = []
@@ -4917,3 +5199,59 @@ export async function applyProfileToReview(req: any): Promise<PluginResponse> {
   Logger.info(`[DCP] Profile applied to review ${rid}: ${(p as any).profile_name}, ${savedPayload.length} reviewers`)
   return { body: { ok: true, applied_count: savedPayload.length, reviewers: savedPayload, profile_name: (p as any).profile_name } }
 }
+
+// ============================================================
+// External API 安全出口
+// plugin.yaml 仅引用以下包装器，业务函数不直接暴露给外部请求。
+// ============================================================
+export const apiGetDcpConfig = withAuthorization('identity', getDcpConfig)
+export const apiSavePluginConfig = withAuthorization('admin', savePluginConfig)
+export const apiCreateReview = withAuthorization('create', createReview)
+export const apiGetReviewDetail = withAuthorization('review-read', getReviewDetail)
+export const apiListReviewsByProject = withAuthorization('project-read', listReviewsByProject)
+export const apiGetDcpReviews = withAuthorization('overview', getDcpReviews)
+export const apiListMyReviews = withAuthorization('self', listMyReviews)
+export const apiListTeamReviews = withAuthorization('overview', listTeamReviews)
+export const apiStartReview = withAuthorization('review-creator', startReview)
+export const apiRecallReview = withAuthorization('review-creator', recallReview)
+export const apiUpdateReviewBasicInfo = withAuthorization('review-creator', updateReviewBasicInfo)
+export const apiDeleteReview = withAuthorization('review-creator', deleteReview)
+export const apiRecreateReview = withAuthorization('review-create-creator', recreateReview)
+export const apiUpdateMaterialStatus = withAuthorization('review-contributor', updateMaterialStatus)
+export const apiUploadMaterialFile = withAuthorization('review-contributor', uploadMaterialFile)
+export const apiRemoveMaterialFile = withAuthorization('review-contributor', removeMaterialFile)
+export const apiGetMaterialUploadUrl = withAuthorization('review-contributor', getMaterialUploadUrl)
+export const apiGetMaterialDownloadUrl = withAuthorization('review-read', getMaterialDownloadUrl)
+export const apiGetMaterialPreview = withAuthorization('review-read', getMaterialPreview)
+export const apiGetAttachmentDownloadUrl = withAuthorization('review-read', getAttachmentDownloadUrl)
+export const apiGetAttachmentPreview = withAuthorization('review-read', getAttachmentPreview)
+export const apiUpdateIndicators = withAuthorization('review-contributor', updateIndicators)
+export const apiUpdateReviewers = withAuthorization('review-creator', updateReviewers)
+export const apiSubmitOpinion = withAuthorization('review-participant', submitOpinion)
+export const apiLinkIssue = withAuthorization('review-contributor', linkIssue)
+export const apiGetLinkedIssues = withAuthorization('review-read', getLinkedIssues)
+export const apiCreateIssue = withAuthorization('review-contributor', createIssue)
+export const apiListIssueTypes = withAuthorization('project-read', listIssueTypes)
+export const apiGenerateResolution = withAuthorization('review-publisher', generateResolution)
+export const apiPublishResolution = withAuthorization('review-publisher', publishResolution)
+export const apiAddSupplement = withAuthorization('review-contributor', addSupplement)
+export const apiGetAuditLog = withAuthorization('review-read', getAuditLog)
+export const apiCheckChecklist = withAuthorization('review-participant', checkChecklist)
+export const apiRemindReview = withAuthorization('review-creator', remindReview)
+export const apiTransitionReview = withAuthorization('review-creator', transitionReview)
+export const apiGetReviewState = withAuthorization('review-read', getReviewState)
+export const apiGetReviewRounds = withAuthorization('review-read', getReviewRounds)
+export const apiGetRemediationIssues = withAuthorization('review-read', getRemediationIssues)
+export const apiRefreshRemediationStatus = withAuthorization('review-creator-or-publisher', refreshRemediationStatus)
+export const apiSyncRemediationStatus = withAuthorization('review-creator-or-publisher', syncRemediationStatus)
+export const apiConfirmRemediation = withAuthorization('review-publisher', confirmRemediation)
+export const apiGetDcpStats = withAuthorization('overview', getDcpStats)
+export const apiListReviewerProfiles = withAuthorization('admin', listReviewerProfiles)
+export const apiCreateReviewerProfile = withAuthorization('admin', createReviewerProfile)
+export const apiGetReviewerProfile = withAuthorization('admin', getReviewerProfile)
+export const apiUpdateReviewerProfile = withAuthorization('admin', updateReviewerProfile)
+export const apiDeleteReviewerProfile = withAuthorization('admin', deleteReviewerProfile)
+export const apiListProjectBindings = withAuthorization('admin', listProjectBindings)
+export const apiUpsertProjectBinding = withAuthorization('admin', upsertProjectBinding)
+export const apiDeleteProjectBinding = withAuthorization('admin', deleteProjectBinding)
+export const apiApplyProfileToReview = withAuthorization('review-create-creator', applyProfileToReview)
