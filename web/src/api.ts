@@ -314,3 +314,24 @@ export async function apiPost(endpoint: string, body: any): Promise<any> {
   // external API 响应包裹在 data 中，backend 返回包裹在 body 中
   return json.body || json.data || json
 }
+
+export async function apiDelete(endpoint: string): Promise<any> {
+  const url = buildUrl(endpoint)
+  const res = await fetch(url, {
+    method: 'DELETE',
+    credentials: 'include',
+    headers: { 'Ones-Plugin-Id': getApiAppID() },
+  })
+  if (!res.ok) {
+    throw new DcpApiError(await readApiError(res), res.status)
+  }
+  const json = await res.json()
+  return json.body || json.data || json
+}
+
+// ---- Reviewer Profile / Project Binding ----
+export const upsertProjectBinding = (data: { project_uuid: string; profile_id: string; review_type: string }) =>
+  apiPost('/dcp/project-binding', data)
+
+export const deleteProjectBinding = (bindingId: string) =>
+  apiDelete(`/dcp/project-binding/${bindingId}`)

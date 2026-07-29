@@ -80,9 +80,31 @@ function jsonArr(s: string): any[] {
 function cleanForSet(obj: any): any {
   const out: any = {}
   for (const [k, v] of Object.entries(obj)) {
-    if (v !== null && v !== undefined) out[k] = v
+    if (k !== '_key' && v !== null && v !== undefined) out[k] = v
   }
   return out
+}
+
+// ONES SDK occasionally throws plain objects whose useful fields are non-enumerable.
+// Preserve those fields so API errors remain actionable instead of becoming "[object Object]".
+function formatError(error: any): string {
+  if (error === null || error === undefined) return String(error)
+  if (typeof error === 'string') return error
+  if (error instanceof Error) {
+    const own = Object.getOwnPropertyNames(error)
+    try {
+      const serialized = JSON.stringify(error, own)
+      if (serialized && serialized !== '{}') return serialized
+    } catch { /* fall through to message */ }
+    return error.message || String(error)
+  }
+  if (typeof error === 'object') {
+    try {
+      const serialized = JSON.stringify(error)
+      if (serialized && serialized !== '{}') return serialized
+    } catch { /* fall through to String */ }
+  }
+  return String(error)
 }
 
 function makeUuid(): string {
@@ -212,6 +234,20 @@ function getParam(req: any, name: string): string {
   // 最后一个兜底：匹配路径末尾段（如 /dcp/review/{value} 无子路径时）
   const last = url.match(/\/([^/]+)\/?$/)
   if (last && last[1] !== name) return last[1]
+  return ''
+}
+
+function getQueryParam(req: any, name: string): string {
+  if (req.query?.[name] !== undefined) return String(req.query[name])
+  const rawUrl = req.url || req.path || ''
+  const qIdx = rawUrl.indexOf('?')
+  if (qIdx < 0) return ''
+  for (const pair of rawUrl.slice(qIdx + 1).split('&')) {
+    const eq = pair.indexOf('=')
+    const key = eq >= 0 ? pair.slice(0, eq) : pair
+    if (decodeURIComponent(key) !== name) continue
+    return decodeURIComponent(eq >= 0 ? pair.slice(eq + 1) : '')
+  }
   return ''
 }
 
@@ -524,7 +560,7 @@ async function authorizeApiRequest(req: any, policy: ApiPolicy): Promise<PluginR
     logAuthorizationDenied(req, 'REVIEW_ACCESS_DENIED', policy, `review=${reviewUUID}`)
     return authResponse(403, 'REVIEW_ACCESS_DENIED', '没有访问或操作该评审单的权限')
   } catch (error: any) {
-    const message = error?.message || String(error)
+    const message = error?.message || (typeof error === 'object' ? JSON.stringify(error) : String(error))
     Logger.error(`[DCP][AUTHZ_UNAVAILABLE] policy=${policy}, error=${message}`)
     const code = error instanceof AuthorizationServiceError
       ? error.code
@@ -5065,7 +5101,7 @@ export async function deleteReviewerProfile(req: any): Promise<PluginResponse> {
 
 // GET /dcp/project-bindings?project_uuid=xxx
 export async function listProjectBindings(req: any): Promise<PluginResponse> {
-  const puid = getParam(req, 'project_uuid') || ''
+  const puid = getQueryParam(req, 'project_uuid')
   const bindings = puid
     ? await qAll(projectBinding, (v: any) => v.project_uuid === puid)
     : await qAll(projectBinding)
@@ -5097,25 +5133,32 @@ export async function upsertProjectBinding(req: any): Promise<PluginResponse> {
   const existing = await qAll(projectBinding, (v: any) => v.project_uuid === project_uuid && (v.review_type || 'dcp') === rvType)
   const now = Date.now()
   let bindingId: string
-  if (existing.length > 0) {
-    // 更新已有绑定
-    bindingId = existing[0]._key
-    await projectBinding.set(bindingId, {
-      ...existing[0],
-      profile_id,
-      updated_at: now,
-    })
-    Logger.info(`[DCP] ProjectBinding updated: ${bindingId} → ${profile_id}`)
-  } else {
-    // 新建绑定
-    bindingId = makeUuid()
-    await projectBinding.set(bindingId, {
-      project_uuid, profile_id,
-      review_type: rvType,
-      created_by: operatorUuid || '',
-      created_at: now,
-    })
-    Logger.info(`[DCP] ProjectBinding created: ${bindingId}`)
+  try {
+    if (existing.length > 0) {
+      // 更新已有绑定
+      bindingId = existing[0]._key
+      await projectBinding.set(bindingId, cleanForSet({
+        ...existing[0],
+        project_uuid,
+        profile_id,
+        review_type: rvType,
+      }))
+      Logger.info(`[DCP] ProjectBinding updated: ${bindingId} → ${profile_id}`)
+    } else {
+      // 新建绑定
+      bindingId = makeUuid()
+      await projectBinding.set(bindingId, cleanForSet({
+        project_uuid, profile_id,
+        review_type: rvType,
+        created_by: operatorUuid || '',
+        created_at: now,
+      }))
+      Logger.info(`[DCP] ProjectBinding created: ${bindingId}`)
+    }
+  } catch (error: any) {
+    const message = formatError(error)
+    Logger.error(`[DCP] ProjectBinding persistence failed: project=${project_uuid}, profile=${profile_id}, error=${message}`)
+    return { body: { error: `项目绑定保存失败: ${message}` }, statusCode: 500 }
   }
   return { body: { binding_id: bindingId, project_uuid, profile_id, profile_name: (p as any).profile_name || '' } }
 }
