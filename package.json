@@ -10,6 +10,7 @@
     "help": "op help",
     "packup": "op packup",
     "test:auth": "node scripts/auth-policy.test.mjs",
+    "test:guardrails": "node scripts/review-guardrails.test.mjs",
     "prepare": "husky && op init"
   },
   "engines": {

@@ -216,7 +216,7 @@ export const remindReview = (uuid: string, data: { target: 'reviewers' | 'resolu
   callApi(`/dcp/review/${uuid}/remind`, { method: 'POST', body: JSON.stringify(data) })
 
 // ---- 状态机 ----
-export const transitionReview = (uuid: string, data: { target_state: string; operator_uuid: string; reason?: string }) =>
+export const transitionReview = (uuid: string, data: { target_state: 're_reviewing'; reason?: string }) =>
   callApi(`/dcp/review/${uuid}/transition`, { method: 'POST', body: JSON.stringify(data) })
 export const getReviewState = (uuid: string) => callApi(`/dcp/review/${uuid}/state`)
 export const getReviewRounds = (uuid: string) => callApi(`/dcp/review/${uuid}/rounds`)
@@ -224,9 +224,9 @@ export const getReviewRounds = (uuid: string) => callApi(`/dcp/review/${uuid}/ro
 // ---- 整改闭环 ----
 export const getRemediationIssues = (uuid: string) => callApi(`/dcp/review/${uuid}/remediation`)
 export const refreshRemediationStatus = (uuid: string) => callApi(`/dcp/review/${uuid}/remediation/refresh`, { method: 'POST' })
-export const syncRemediationStatus = (uuid: string, items: any[]) =>
+export const syncRemediationStatus = (uuid: string, items: Array<{ issue_uuid: string; status_name?: string; status_id?: string; category?: string | number }>) =>
   callApi(`/dcp/review/${uuid}/remediation/sync`, { method: 'POST', body: JSON.stringify({ items }) })
-export const confirmRemediation = (uuid: string, data: { publisher_uuid: string; next_action: 'complete' | 're_review' }) =>
+export const confirmRemediation = (uuid: string, data: { next_action: 're_review' }) =>
   callApi(`/dcp/review/${uuid}/remediation/confirm`, { method: 'POST', body: JSON.stringify(data) })
 
 // ---- Reviewer Profile ----

@@ -154,6 +154,13 @@ declare var ONESEntities: {
             issue_title?: string;
             issue_type?: string;
             issue_status?: string;
+            issue_status_id?: string;
+            issue_status_category?: string;
+            issue_status_is_done?: boolean;
+            issue_status_verification?: string;
+            issue_status_source?: string;
+            issue_status_checked_at?: number;
+            issue_status_error?: string;
             linked_by?: string;
             linked_by_name?: string;
             linked_at?: number;
@@ -162,6 +169,19 @@ declare var ONESEntities: {
             locked?: string;
             locked_at?: number;
             locked_by?: string;
+        };
+        indexes: null;
+    };
+    dcp_phase_guard: {
+        attributes: {
+            guard_key?: string;
+            project_uuid?: string;
+            phase_code?: string;
+            review_type?: string;
+            review_uuid?: string;
+            guard_state?: string;
+            claimed_at?: number;
+            released_at?: number;
         };
         indexes: null;
     };

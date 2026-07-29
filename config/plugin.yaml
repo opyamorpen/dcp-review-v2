@@ -2,7 +2,7 @@ service:
   app_id: 709xehle
   name: DCP评审中心
   description: 团队级DCP/TR评审插件。支持项目内发起DCP阶段决策评审和TR技术评审、多人异步评审、关联工作项、不可覆盖决议快照和审计追溯。
-  version: 1.31.41
+  version: 1.31.43
   mode: org
   logo: null
   language: nodejs
@@ -784,6 +784,33 @@ storage:
           type: text
           length: 32
           default: ''
+        issue_status_id:
+          type: text
+          length: 64
+          default: ''
+        issue_status_category:
+          type: text
+          length: 32
+          default: ''
+        issue_status_is_done:
+          type: boolean
+          default: false
+        issue_status_verification:
+          type: text
+          length: 16
+          default: unknown
+        issue_status_source:
+          type: text
+          length: 32
+          default: ''
+        issue_status_checked_at:
+          type: integer
+          length: 16
+          default: 0
+        issue_status_error:
+          type: text
+          length: 512
+          default: ''
         linked_by:
           type: text
           length: 64
@@ -816,6 +843,40 @@ storage:
           type: text
           length: 64
           default: ''
+    - name: dcp_phase_guard
+      attributes:
+        guard_key:
+          type: text
+          length: 128
+          default: ''
+        project_uuid:
+          type: text
+          length: 64
+          default: ''
+        phase_code:
+          type: text
+          length: 16
+          default: ''
+        review_type:
+          type: text
+          length: 8
+          default: dcp
+        review_uuid:
+          type: text
+          length: 64
+          default: ''
+        guard_state:
+          type: text
+          length: 16
+          default: active
+        claimed_at:
+          type: integer
+          length: 16
+          default: 0
+        released_at:
+          type: integer
+          length: 16
+          default: 0
     - name: dcp_resolution
       attributes:
         review_uuid:
