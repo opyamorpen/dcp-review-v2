@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import ReactDOM from 'react-dom'
-import { apiGet, apiPost, DcpApiError, getTeamUUID } from '../../api'
+import { apiGet, apiPost, deleteProjectBinding, getTeamUUID, upsertProjectBinding } from '../../api'
 
 type NavKey = 'phases' | 'materials' | 'indicators' | 'roles' | 'checklist' | 'resolution' | 'notify' | 'ipdflow' | 'recall' | 'remediation' | 'profiles'
 
@@ -82,8 +82,8 @@ const App: React.FC = () => {
 
  useEffect(() => { loadConfig() }, [])
 
- async function loadConfig() {
- setLoading(true)
+ async function loadConfig(showLoading = true) {
+ if (showLoading) setLoading(true)
  try {
  const [data, profileData, bindingData] = await Promise.all([
  apiGet('/dcp/config'),
@@ -114,7 +114,7 @@ const App: React.FC = () => {
  setProfiles(profileData.profiles || [])
  setProjectBindings(bindingData.bindings || [])
  } catch (err: any) { setMessage('加载失败: ' + err.message) }
- finally { setLoading(false) }
+ finally { if (showLoading) setLoading(false) }
  }
 
  async function handleSave() {
@@ -178,7 +178,7 @@ const App: React.FC = () => {
  {nav === 'notify' && <NotifySettings config={notifyConfig} onChange={setNotifyConfig} editing={editing} />}
  {nav === 'recall' && <RecallSettings config={recallConfig} onChange={setRecallConfig} editing={editing} />}
  {nav === 'remediation' && <RemediationSettings issueType={remediationIssueType} onChange={setRemediationIssueType} editing={editing} />}
- {nav === 'profiles' && <ReviewerProfilesPanel profiles={profiles.filter((p: any) => (p.review_type || 'dcp') === reviewType)} projectBindings={projectBindings.filter((b: any) => (b.review_type || 'dcp') === reviewType)} roles={roles.filter((r: any) => (r.review_type || 'dcp') === reviewType)} reviewType={reviewType} onRefresh={() => loadConfig()} />}
+ {nav === 'profiles' && <ReviewerProfilesPanel profiles={profiles.filter((p: any) => (p.review_type || 'dcp') === reviewType)} projectBindings={projectBindings.filter((b: any) => (b.review_type || 'dcp') === reviewType)} roles={roles.filter((r: any) => (r.review_type || 'dcp') === reviewType)} reviewType={reviewType} onRefresh={() => loadConfig(false)} />}
  </div>
  {editing && nav !== 'profiles' && (
  <div style={S.saveBar}>
@@ -1002,7 +1002,7 @@ const ReviewerProfilesPanel: React.FC<{
   projectBindings: any[]
   roles: any[]
   reviewType: string
-  onRefresh: () => void
+  onRefresh: () => Promise<void>
 }> = ({ profiles, projectBindings, roles, reviewType, onRefresh }) => {
   type Assignment = { mode: 'single' | 'pool'; default_reviewer_uuid: string; candidate_uuids: string[] }
   const [editingProfile, setEditingProfile] = useState<any>(null)
@@ -1015,8 +1015,8 @@ const ReviewerProfilesPanel: React.FC<{
   })
   const [members, setMembers] = useState<{ uuid: string; name: string; email: string }[]>([])
   const [projects, setProjects] = useState<ProjectOption[]>([])
+  const [bindingProfile, setBindingProfile] = useState<any>(null)
   const [selectedProjectUuids, setSelectedProjectUuids] = useState<string[]>([])
-  const [bindingProfileId, setBindingProfileId] = useState('')
   const [bindingSaving, setBindingSaving] = useState(false)
 
   useEffect(() => {
@@ -1190,55 +1190,40 @@ const ReviewerProfilesPanel: React.FC<{
     }
   }
 
+  function startBinding(profile: any) {
+    const bound = projectBindings.filter(b => b.profile_id === profile._key).map(b => b.project_uuid).filter(Boolean)
+    setBindingProfile(profile)
+    setSelectedProjectUuids(bound)
+    setMsg('')
+  }
+
   async function handleSaveBindings() {
-    if (!bindingProfileId) {
-      setMsg('请选择要绑定的 Profile')
-      return
-    }
+    if (!bindingProfile) return
     if (selectedProjectUuids.length === 0) {
-      setMsg('请选择至少一个项目')
-      return
+      if (!confirm('当前未选择项目，将解除该 Profile 的全部项目绑定，是否继续？')) return
     }
     setBindingSaving(true)
     setMsg('')
     try {
-      const tu = getTeamUUID()
-      for (const projectUUID of selectedProjectUuids) {
-        const res = await fetch(`/project/api/project/team/${tu}/dcp/project-binding`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json', 'Ones-Plugin-Id': '709xehle' },
-          body: JSON.stringify({ project_uuid: projectUUID, profile_id: bindingProfileId, review_type: reviewType }),
-        })
-        const data = await res.json()
-        const body = data.body || data
-        if (body.error) throw new Error(body.error)
+      const current = projectBindings.filter(b => b.profile_id === bindingProfile._key)
+      const currentByProject = new Map(current.map(b => [b.project_uuid, b]))
+      const selected = new Set(selectedProjectUuids)
+      for (const projectUUID of selected) {
+        if (!currentByProject.has(projectUUID)) {
+          await upsertProjectBinding({ project_uuid: projectUUID, profile_id: bindingProfile._key, review_type: reviewType })
+        }
       }
-      setSelectedProjectUuids([])
-      onRefresh()
-      setMsg('项目绑定已保存')
+      for (const binding of current) {
+        if (!selected.has(binding.project_uuid)) await deleteProjectBinding(binding._key)
+      }
+      await onRefresh()
+      setBindingProfile(null)
+      setMsg(`Profile「${bindingProfile.profile_name}」的项目绑定已保存`)
     } catch (err: any) {
       setMsg('绑定失败: ' + (err?.message || err))
     } finally {
       setBindingSaving(false)
     }
-  }
-
-  async function handleDeleteBinding(bindingId: string) {
-    const tu = getTeamUUID()
-    const res = await fetch(`/project/api/project/team/${tu}/dcp/project-binding/${bindingId}`, {
-      method: 'DELETE',
-      credentials: 'include',
-      headers: { 'Ones-Plugin-Id': '709xehle' },
-    })
-    const data = await res.json()
-    const body = data.body || data
-    if (body.error) {
-      setMsg('删除绑定失败: ' + body.error)
-      return
-    }
-    onRefresh()
-    setMsg('绑定已删除')
   }
 
   if (!editingProfile) {
@@ -1287,51 +1272,45 @@ const ReviewerProfilesPanel: React.FC<{
 
         <div style={{ marginTop: 32 }}>
           <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 5 }}>项目绑定</div>
-            <div style={{ color: '#8c8c8c', fontSize: 12 }}>按项目名称选择一个或多个项目，并将它们绑定到同一套 Profile。</div>
+            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 5 }}>应用到项目</div>
+            <div style={{ color: '#8c8c8c', fontSize: 12 }}>从 Profile 选择要复用这套评审人配置的项目，保存后会立即显示在对应 Profile 下。</div>
           </div>
-          <div style={{ ...S.card, marginBottom: 14 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(320px, 2fr) minmax(220px, 1fr) auto', gap: 12, alignItems: 'end' }}>
-              <div>
-                <label style={{ display: 'block', marginBottom: 6, color: '#595959', fontWeight: 500 }}>选择项目</label>
-                <ProjectMultiPicker projects={projects} selected={selectedProjectUuids} onChange={setSelectedProjectUuids} />
+          <table style={S.table}>
+            <thead><tr>
+              <th style={S.th}>Profile</th>
+              <th style={S.th}>已应用项目</th>
+              <th style={{ ...S.th, width: 150 }}>操作</th>
+            </tr></thead>
+            <tbody>
+              {profiles.map((profile: any) => {
+                const bindings = projectBindings.filter(b => b.profile_id === profile._key)
+                const names = bindings.map(b => projects.find(p => p.uuid === b.project_uuid)?.name || b.project_name || b.project_identifier || b.project_uuid).filter(Boolean)
+                return (
+                  <tr key={`binding-${profile._key}`}>
+                    <td style={S.td}><strong>{profile.profile_name}</strong><div style={{ color: '#999', fontSize: 11, marginTop: 3 }}>{(profile.review_type || reviewType).toUpperCase()}</div></td>
+                    <td style={S.td}>{names.length ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{names.map((name: string, i: number) => <span key={`${name}-${i}`} style={{ padding: '3px 8px', borderRadius: 4, background: '#f0f5ff', color: '#1677ff', fontSize: 12 }}>{name}</span>)}</div> : <span style={{ color: '#999' }}>尚未应用到项目</span>}</td>
+                    <td style={S.td}><button style={{ ...S.btn(false), padding: '5px 12px' }} onClick={() => startBinding(profile)}>配置项目</button></td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        {bindingProfile && (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 50, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onMouseDown={e => { if (e.target === e.currentTarget && !bindingSaving) setBindingProfile(null) }}>
+            <div style={{ ...S.card, width: 'min(680px, 100%)', maxHeight: '80vh', overflow: 'auto', boxShadow: '0 12px 40px rgba(0,0,0,0.2)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                <div style={{ fontSize: 16, fontWeight: 600 }}>配置项目：{bindingProfile.profile_name}</div>
+                <button title="关闭" style={{ border: 'none', background: 'transparent', fontSize: 20, color: '#999', cursor: 'pointer' }} onClick={() => !bindingSaving && setBindingProfile(null)}>×</button>
               </div>
-              <div>
-                <label style={{ display: 'block', marginBottom: 6, color: '#595959', fontWeight: 500 }}>应用 Profile</label>
-                <select style={{ ...S.select, width: '100%', height: 34 }} value={bindingProfileId} onChange={e => setBindingProfileId(e.target.value)}>
-                  <option value="">选择 Profile</option>
-                  {profiles.map((p: any) => <option key={p._key} value={p._key}>{p.profile_name}</option>)}
-                </select>
+              <ProjectMultiPicker projects={projects} selected={selectedProjectUuids} onChange={setSelectedProjectUuids} />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+                <button style={S.btn(false)} disabled={bindingSaving} onClick={() => setBindingProfile(null)}>取消</button>
+                <button style={S.btn(true, bindingSaving)} disabled={bindingSaving} onClick={handleSaveBindings}>{bindingSaving ? '保存中…' : '保存绑定'}</button>
               </div>
-              <button style={{ ...S.btn(true, bindingSaving), height: 34, whiteSpace: 'nowrap' }} disabled={bindingSaving} onClick={handleSaveBindings}>{bindingSaving ? '保存中…' : '保存绑定'}</button>
             </div>
           </div>
-          {projectBindings.length === 0 ? (
-            <div style={{ color: '#999', padding: 20, textAlign: 'center', background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 6 }}>暂无项目绑定</div>
-          ) : (
-            <table style={S.table}>
-              <thead><tr>
-                <th style={S.th}>项目</th>
-                <th style={S.th}>Profile</th>
-                <th style={S.th}>类型</th>
-                <th style={{ ...S.th, width: 90 }}>操作</th>
-              </tr></thead>
-              <tbody>
-                {projectBindings.map((b: any) => (
-                  <tr key={b._key}>
-                    <td style={S.td}>
-                      <div style={{ fontWeight: 500 }}>{projects.find(p => p.uuid === b.project_uuid || p.identifier === b.project_uuid)?.name || b.project_name || b.project_identifier || '未知项目'}</div>
-                      {projects.find(p => p.uuid === b.project_uuid || p.identifier === b.project_uuid)?.identifier && <div style={{ color: '#999', fontSize: 11, marginTop: 2 }}>{projects.find(p => p.uuid === b.project_uuid || p.identifier === b.project_uuid)?.identifier}</div>}
-                    </td>
-                    <td style={S.td}>{profiles.find(p => p._key === b.profile_id)?.profile_name || b.profile_name || '未解析 Profile'}</td>
-                    <td style={S.td}>{(b.review_type || 'dcp').toUpperCase()}</td>
-                    <td style={S.td}><button style={S.delBtn} onClick={() => handleDeleteBinding(b._key)}>删除</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+        )}
       </div>
     )
   }
@@ -1418,6 +1397,23 @@ const ReviewerProfilesPanel: React.FC<{
   )
 }
 
+const SelectedMemberChip: React.FC<{
+  name: string
+  onClear: () => void
+  title?: string
+}> = ({ name, onClear, title = '清除' }) => (
+  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, background: '#e6f4ff', padding: '2px 10px', borderRadius: 4 }}>
+    {name}
+    <button
+      type="button"
+      onClick={onClear}
+      aria-label={title}
+      title={title}
+      style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#ff4d4f', fontSize: 16, padding: 0, lineHeight: 1 }}
+    >×</button>
+  </span>
+)
+
 const CandidatePoolPicker: React.FC<{
   selected: string[]
   members: { uuid: string; name: string; email: string }[]
@@ -1452,10 +1448,7 @@ const CandidatePoolPicker: React.FC<{
         {selectedUuids.length === 0 ? <span style={{ color: '#999', fontSize: 12 }}>尚未选择候选人</span> : selectedUuids.map(uid => {
           const m = members.find(x => x.uuid === uid)
           return (
-            <span key={uid} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px', borderRadius: 4, background: '#e6f4ff', color: '#1677ff', fontSize: 12 }}>
-              {m?.name || '未知成员'}
-              <button type="button" title="移除候选人" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#1677ff', padding: 0, lineHeight: 1 }} onClick={() => onToggle(uid)}>×</button>
-            </span>
+            <SelectedMemberChip key={uid} name={m?.name || '未知成员'} title="移除候选人" onClear={() => onToggle(uid)} />
           )
         })}
       </div>
@@ -1571,58 +1564,84 @@ const UserPicker: React.FC<{
   forceDropUp?: boolean
 }> = ({ value, onChange, placeholder = '搜索用户姓名或邮箱…', displayName, allowedUserIds, members, forceDropUp = false }) => {
   const [query, setQuery] = useState('')
+  const [results, setResults] = useState<{ uuid: string; name: string; email: string }[]>([])
   const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [dropUp, setDropUp] = useState(false)
   const ref = React.useRef<HTMLDivElement>(null)
+  const timerRef = React.useRef<any>(null)
+  const inputRef = React.useRef<HTMLInputElement>(null)
   const allowedSet = React.useMemo(() => allowedUserIds && allowedUserIds.length > 0 ? new Set(allowedUserIds) : null, [allowedUserIds])
-  const filtered = React.useMemo(() => {
-    const base = allowedSet ? members.filter(m => allowedSet.has(m.uuid)) : members
-    if (!query.trim()) return base.slice(0, 30)
-    const kw = query.trim().toLowerCase()
-    return base.filter(m => m.name.toLowerCase().includes(kw) || m.email.toLowerCase().includes(kw)).slice(0, 30)
-  }, [allowedSet, members, query])
   const shownName = value ? (displayName || members.find(m => m.uuid === value)?.name || '') : ''
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
+
+  function search(kw: string) {
+    const keyword = kw.trim().toLowerCase()
+    if (!keyword) {
+      setResults([])
+      setOpen(false)
+      setLoading(false)
+      return
+    }
+    const base = allowedSet ? members.filter(m => allowedSet.has(m.uuid)) : members
+    setLoading(true)
+    const next = base.filter(m => m.name.toLowerCase().includes(keyword) || m.email.toLowerCase().includes(keyword)).slice(0, 20)
+    setResults(next)
+    setOpen(true)
+    setLoading(false)
+  }
+
+  function handleChange(next: string) {
+    setQuery(next)
+    if (timerRef.current) clearTimeout(timerRef.current)
+    timerRef.current = setTimeout(() => search(next), 200)
+  }
+
+  function handleClear() {
+    onChange({ uuid: '', name: '' })
+    setQuery('')
+    setResults([])
+    setOpen(false)
+    if (inputRef.current) inputRef.current.value = ''
+  }
 
   if (shownName) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontSize: 13, fontWeight: 500, background: '#e6f4ff', padding: '2px 10px', borderRadius: 4 }}>
-          {shownName}
-        </span>
-        <button
-          onClick={() => onChange({ uuid: '', name: '' })}
-          style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#ff4d4f', fontSize: 16, padding: 0, lineHeight: 1 }}
-          title="清除"
-        >×</button>
-      </div>
+      <SelectedMemberChip name={shownName} onClear={handleClear} />
     )
   }
 
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <input
+        ref={inputRef}
         style={S.input}
         value={query}
-        onChange={e => { setQuery(e.target.value); setDropUp(forceDropUp || shouldDropUp(ref.current, 220)); setOpen(true) }}
-        onFocus={() => { setDropUp(forceDropUp || shouldDropUp(ref.current, 220)); setOpen(true) }}
-        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onChange={e => { handleChange(e.target.value); setDropUp(forceDropUp || shouldDropUp(ref.current, 220)) }}
+        onFocus={() => { if (query.trim()) { setDropUp(forceDropUp || shouldDropUp(ref.current, 220)); setOpen(true) } }}
+        onBlur={() => setTimeout(() => setOpen(false), 200)}
         placeholder={placeholder}
       />
-      {open && filtered.length > 0 && (
+      {loading && <div style={{ position: 'absolute', right: 10, top: 7, fontSize: 12, color: '#999' }}>搜索中…</div>}
+      {open && results.length > 0 && (
         <div style={{ position: 'absolute', zIndex: 20, left: 0, right: 0, maxHeight: 220, overflow: 'auto', top: dropUp ? 'auto' : '100%', bottom: dropUp ? 'calc(100% + 4px)' : 'auto', background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4, marginTop: dropUp ? 0 : 4, marginBottom: dropUp ? 4 : 0, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
-          {filtered.map(m => (
+          {results.map(m => (
             <div
               key={m.uuid}
               onMouseDown={e => {
                 e.preventDefault()
                 onChange({ uuid: m.uuid, name: m.name })
                 setQuery('')
+                setResults([])
                 setOpen(false)
               }}
-              style={{ padding: '8px 10px', cursor: 'pointer', borderBottom: '1px solid #f5f5f5' }}
+              style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid #f0f0f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#f5f5f5' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
             >
-              <div style={{ fontWeight: 500 }}>{m.name}</div>
-              {m.email && <div style={{ fontSize: 11, color: '#999' }}>{m.email}</div>}
+              <span>{m.name}</span>
+              {m.email && <span style={{ fontSize: 11, color: '#999' }}>{m.email}</span>}
             </div>
           ))}
         </div>
