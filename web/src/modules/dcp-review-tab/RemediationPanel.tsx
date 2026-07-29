@@ -42,13 +42,14 @@ export const RemediationPanel: React.FC<{
   onCreateRemediation: () => void
   onLinkRemediation: () => void
   onRefreshRemediation: () => void
-  onConfirmRemediation: (nextAction: 'complete' | 're_review') => void
+  onConfirmRemediation: (nextAction: 're_review') => void
   onSetRemediationMsg: (v: string) => void
 }> = (props) => {
   const { data, effState, isCreator, isPublisher } = props
   const allIssues: any[] = data.linked_issues || []
   const remediationIssues: any[] = data.remediation_issues || []
   const allDone = data.remediation_all_done
+  const remediationStatusState = data.remediation_status_state || (allDone ? 'done' : 'unknown')
   const isRemediationPhase = effState === 'remediation_pending'
 
   // 工作项列表（全部），用 badge 区分类型
@@ -114,7 +115,13 @@ export const RemediationPanel: React.FC<{
             </div>
           )}
 
-          {isRemediationPhase && allDone && (
+          {isRemediationPhase && remediationStatusState === 'unknown' && (
+            <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff7e6', color: '#ad6800', border: '1px solid #ffd591' }}>
+              整改项状态尚未通过 ONES 权威校验，暂不能发起复审
+            </div>
+          )}
+
+          {isRemediationPhase && allDone && remediationStatusState === 'done' && (
             <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#f6ffed', color: '#52c41a', border: '1px solid #b7eb8f' }}>
               所有整改项已完成，可在评审单顶部发起复审
             </div>

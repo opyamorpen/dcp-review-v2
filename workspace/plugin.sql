@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS {{dcp_project_binding}} (
   UNIQUE KEY uk_project_type (project_uuid, review_type)
 );
 
+-- dcp_linked_issue 新增 ONES 权威整改状态快照字段：
+-- issue_status_id, issue_status_category, issue_status_is_done,
+-- issue_status_verification, issue_status_source, issue_status_checked_at,
+-- issue_status_error
+
+-- dcp_phase_guard 保存同项目同阶段同类型的活动评审唯一占用记录。
+
 -- ============================================================
 -- dcp_review — 新增 Profile 快照字段
 -- ============================================================

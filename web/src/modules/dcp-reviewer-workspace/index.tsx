@@ -775,10 +775,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  const statusName = task?.status?.name || ''
  const statusId = task?.status?.uuid || ''
  const category = task?.status?.category
- const isDone = typeof category === 'string'
- ? category === 'done' || category === 'closed'
- : typeof category === 'number' ? category === 2 : undefined
- if (statusName) syncItems.push({ issue_uuid: task.uuid, status_name: statusName, status_id: statusId, is_done: isDone })
+ if (statusName) syncItems.push({ issue_uuid: task.uuid, status_name: statusName, status_id: statusId, category })
  }
  }
  } catch {}

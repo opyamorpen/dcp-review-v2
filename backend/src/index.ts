@@ -35,8 +35,9 @@ const checkItem = storage.entity('dcp_checklist_item')
 const checkResult = storage.entity('dcp_checklist_result')
 const reviewerProfile = storage.entity('dcp_reviewer_profile')
 const projectBinding = storage.entity('dcp_project_binding')
+const phaseGuard = storage.entity('dcp_phase_guard')
 
-const ALL_ENTITIES = [matItem, indData, rvReviewer, linkedIssue, resolution, supplement, auditLog]
+const ALL_ENTITIES = [matItem, indData, rvReviewer, linkedIssue, resolution, supplement, auditLog, phaseGuard]
 
 // ============================================================
 // 工具
@@ -117,6 +118,91 @@ function getLatestResolution(resolutions: any[], roundNo: number): any | null {
   if (current.length === 0) return null
   current.sort((a: any, b: any) => (b.published_at || 0) - (a.published_at || 0))
   return current[0]
+}
+
+const ACTIVE_PHASE_STATES = new Set([
+  'draft', 'ready', 'reviewing', 'awaiting_resolution',
+  'resolution_published', 'remediation_pending', 're_reviewing',
+])
+
+function normalizeReviewType(value: any): string {
+  return value === 'tr' ? 'tr' : 'dcp'
+}
+
+function phaseGuardKey(projectUuid: string, phaseCode: string, reviewType: string): string {
+  const raw = `${projectUuid}|${phaseCode}|${normalizeReviewType(reviewType)}`
+  let hash = 2166136261
+  for (let i = 0; i < raw.length; i++) {
+    hash ^= raw.charCodeAt(i)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `phase_${(hash >>> 0).toString(36)}`
+}
+
+async function findPhaseReviewConflict(
+  projectIds: Set<string>, phaseCode: string, reviewType: string, excludeReviewUuid = '',
+): Promise<{ kind: 'active' | 'passed'; review: any; resolution: any | null } | null> {
+  const candidates = await qAll(review, (v: any) =>
+    projectIds.has(String(v.project_uuid || '')) &&
+    v.phase_code === phaseCode &&
+    normalizeReviewType(v.review_type) === normalizeReviewType(reviewType) &&
+    v.review_uuid !== excludeReviewUuid,
+  )
+  for (const candidate of candidates) {
+    const state = getEffectiveState(candidate)
+    const resolutions = await qAll(resolution, (v: any) => v.review_uuid === candidate.review_uuid)
+    const latest = getLatestResolution(resolutions, Number(candidate.round_no || 1))
+    if (ACTIVE_PHASE_STATES.has(state)) return { kind: 'active', review: candidate, resolution: latest }
+    if ((state === 'completed' || state === 'archived') &&
+      (latest?.final_conclusion === 'pass' || latest?.final_conclusion === 'conditional_pass')) {
+      return { kind: 'passed', review: candidate, resolution: latest }
+    }
+  }
+  return null
+}
+
+async function claimPhaseGuard(
+  projectUuid: string, phaseCode: string, reviewType: string, reviewUuid: string,
+): Promise<{ ok: boolean; existing?: any }> {
+  const key = phaseGuardKey(projectUuid, phaseCode, reviewType)
+  const now = Date.now()
+  let existing: any = null
+  try { existing = await phaseGuard.get(key) as any } catch { existing = null }
+  if (existing?.guard_state === 'active' && existing.review_uuid && existing.review_uuid !== reviewUuid) {
+    const existingReview = await review.get(existing.review_uuid)
+    if (existingReview) {
+      const conflict = await findPhaseReviewConflict(new Set([projectUuid]), phaseCode, reviewType, reviewUuid)
+      if (conflict) return { ok: false, existing: existingReview }
+    }
+  }
+  await phaseGuard.set(key, {
+    guard_key: key,
+    project_uuid: projectUuid,
+    phase_code: phaseCode,
+    review_type: normalizeReviewType(reviewType),
+    review_uuid: reviewUuid,
+    guard_state: 'active',
+    claimed_at: now,
+    released_at: 0,
+  })
+  const confirmed = await phaseGuard.get(key) as any
+  if (confirmed?.review_uuid !== reviewUuid || confirmed?.guard_state !== 'active') {
+    return { ok: false, existing: confirmed }
+  }
+  return { ok: true }
+}
+
+async function releasePhaseGuard(rv: any): Promise<void> {
+  const projectUuid = String(rv?.project_uuid || '')
+  const phaseCode = String(rv?.phase_code || '')
+  if (!projectUuid || !phaseCode) return
+  const key = phaseGuardKey(projectUuid, phaseCode, normalizeReviewType(rv?.review_type))
+  try {
+    const current = await phaseGuard.get(key) as any
+    if (current?.review_uuid === rv.review_uuid) {
+      await phaseGuard.set(key, { ...current, guard_state: 'released', released_at: Date.now() })
+    }
+  } catch { /* guard release must not block the business operation */ }
 }
 
 // ---- 通知 ---- 
@@ -1267,6 +1353,9 @@ function isValidTransition(from: string, to: string): boolean {
 // 不单独 set——调用方在已有的 review.set 中合并新字段
 function buildStateTransition(rv: any, newState: string, by: string, reason: string, extra?: Record<string, any>): Record<string, any> {
   const currentState = getEffectiveState(rv)
+  if (currentState !== newState && !isValidTransition(currentState, newState)) {
+    throw new Error(`非法状态流转: ${currentState} -> ${newState}`)
+  }
   // 进入 re_reviewing 时开启新轮次——先算出新 round_no，再传给 appendStateHistory
   let newRoundNo = Number(rv.round_no || 1)
   if (newState === 're_reviewing' && currentState === 'remediation_pending') {
@@ -1400,34 +1489,21 @@ export async function createReview(req: any): Promise<PluginResponse> {
   }
   const rvUuid = makeUuid()
   const now = Date.now()
-  const reviewType = review_type || 'dcp'
+  const reviewType = normalizeReviewType(review_type)
   const projectAliases = Array.isArray(b.project_aliases) ? b.project_aliases.filter(Boolean).map(String) : []
   const projectLookupIds = new Set([project_uuid, ...projectAliases])
 
-  // 校验：同项目同阶段同类型已有决议通过（pass / conditional_pass）的评审单时，禁止重复发起
-  const existingRvs = await qAll(review, (v: any) =>
-    projectLookupIds.has(v.project_uuid) &&
-    v.phase_code === phase_code &&
-    (v.review_type || 'dcp') === reviewType &&
-    v.status === 'completed'
-  )
-  if (existingRvs.length > 0) {
-    const allPhases = await qAll(phaseTpl)
-    const phMap = new Map(allPhases.map((p: any) => [p.phase_code, p.phase_name]))
-    // 检查是否有决议结论为 pass 或 conditional_pass
-    for (const erv of existingRvs) {
-      const resolutions = await qAll(resolution, (v: any) => v.review_uuid === erv.review_uuid)
-      const passed = resolutions.some((r: any) =>
-        r.final_conclusion === 'pass' || r.final_conclusion === 'conditional_pass'
-      )
-      if (passed) {
-        const phaseName = phMap.get(phase_code) || phase_code
-        return {
-          body: { error: `${reviewType === 'tr' ? 'TR' : 'DCP'}阶段「${phaseName}」已通过评审，不可重复发起` },
-          statusCode: 400,
-        }
-      }
-    }
+  // 同项目、同阶段、同类型只允许一个活动或已通过评审；复审必须复用原评审单。
+  const phaseConflict = await findPhaseReviewConflict(projectLookupIds, phase_code, reviewType)
+  if (phaseConflict) {
+    const phaseName = (await qAll(phaseTpl, (v: any) =>
+      v.phase_code === phase_code && normalizeReviewType(v.review_type) === normalizeReviewType(reviewType)))[0]?.phase_name || phase_code
+    const conflictState = getEffectiveState(phaseConflict.review)
+    const code = phaseConflict.kind === 'passed' ? 'REVIEW_PHASE_ALREADY_PASSED' : 'REVIEW_PHASE_ALREADY_ACTIVE'
+    const message = phaseConflict.kind === 'passed'
+      ? `${reviewType === 'tr' ? 'TR' : 'DCP'}阶段「${phaseName}」已通过评审，不可重复发起`
+      : `${reviewType === 'tr' ? 'TR' : 'DCP'}阶段「${phaseName}」已有评审单处于${conflictState}，请继续原评审单`
+    return { body: { code, error: message, conflict_review_uuid: phaseConflict.review.review_uuid }, statusCode: 409 }
   }
 
   // 固化决议规则：创建时把当前规则 + 依赖角色模板的展开结果一次性写入评审单
@@ -1469,6 +1545,14 @@ export async function createReview(req: any): Promise<PluginResponse> {
     template_id: c._key, phase_code: c.phase_code, role_name: c.role_name,
     item_text: c.item_text, sort_order: c.sort_order ?? 0,
   })))
+
+  const claimedGuard = await claimPhaseGuard(project_uuid, phase_code, reviewType, rvUuid)
+  if (!claimedGuard.ok) {
+    return {
+      body: { code: 'REVIEW_PHASE_ALREADY_ACTIVE', error: '该项目阶段已有评审单，请刷新后继续原评审单', conflict_review_uuid: claimedGuard.existing?.review_uuid || '' },
+      statusCode: 409,
+    }
+  }
 
   await review.set(rvUuid, cleanForSet({
     review_uuid: rvUuid, project_uuid, phase_code,
@@ -1635,7 +1719,19 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
   const newRid = makeUuid()
   const now = Date.now()
   // 重新发起使用当前最新配置固化规则（而非复制源单旧规则）
-  const reviewType = srcRv.review_type || 'dcp'
+  const reviewType = normalizeReviewType(srcRv.review_type)
+  const newProjectUuid = b.project_uuid || srcRv.project_uuid
+  const phaseConflict = await findPhaseReviewConflict(new Set([String(newProjectUuid)]), srcRv.phase_code, reviewType)
+  if (phaseConflict) {
+    return {
+      body: {
+        code: phaseConflict.kind === 'passed' ? 'REVIEW_PHASE_ALREADY_PASSED' : 'REVIEW_PHASE_ALREADY_ACTIVE',
+        error: phaseConflict.kind === 'passed' ? '该阶段已经通过，不能重复发起' : '该项目阶段已有活动评审单，请继续原评审单',
+        conflict_review_uuid: phaseConflict.review.review_uuid,
+      },
+      statusCode: 409,
+    }
+  }
   let frozenRuleJson = ''
   try {
     const frozenRule = await buildFrozenRule(reviewType)
@@ -1687,9 +1783,14 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
     item_text: c.item_text, sort_order: c.sort_order ?? 0,
   })))
 
+  const claimedGuard = await claimPhaseGuard(String(newProjectUuid), srcRv.phase_code, reviewType, newRid)
+  if (!claimedGuard.ok) {
+    return { body: { code: 'REVIEW_PHASE_ALREADY_ACTIVE', error: '该项目阶段已有评审单，请刷新后继续原评审单', conflict_review_uuid: claimedGuard.existing?.review_uuid || '' }, statusCode: 409 }
+  }
+
   await review.set(newRid, cleanForSet({
     review_uuid: newRid,
-    project_uuid: b.project_uuid || srcRv.project_uuid,
+    project_uuid: newProjectUuid,
     phase_code: srcRv.phase_code,
     review_title: srcRv.review_title || 'DCP评审',
     meeting_time: 0,
@@ -1836,7 +1937,8 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
     const _currentRoundNo = (rv as any).round_no || 1
     // 整改关联工作项
     const remediationIssues = issues.filter((v: any) => v.link_type === 'remediation')
-    const remediationAllDone = remediationIssues.length > 0 && remediationIssues.every((v: any) => isIssueStatusDone(v.issue_status))
+    const remediationSummary = summarizeRemediation(remediationIssues)
+    const remediationAllDone = remediationSummary.state === 'done'
     // 兼容旧数据：issue_status='done' 还原为「已完成」
     const issuesNormalized = issues.map((v: any) => ({ ...v, issue_status: normalizeIssueStatus(v.issue_status) }))
     const remediationIssuesNormalized = issuesNormalized.filter((v: any) => v.link_type === 'remediation')
@@ -1848,12 +1950,14 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
       linked_issues: issuesNormalized,
       remediation_issues: remediationIssuesNormalized,
       remediation_all_done: remediationAllDone,
+      remediation_status_state: remediationSummary.state,
+      remediation_unknown_count: remediationSummary.unknownCount,
       resolution: resList.find((r: any) => (r.round_no || 1) === _currentRoundNo) || null,
       resolutions: resList.sort((a: any, b: any) => (a.round_no || 1) - (b.round_no || 1)),
       supplements: supps.sort((a: any, b: any) => (b.submitted_at || 0) - (a.submitted_at || 0)),
       checklist: jsonArr((rv as any).checklist_json || '[]'),
       state_history: jsonArr((rv as any).state_history_json || '[]'),
-      available_transitions: VALID_TRANSITIONS[_rvEffState] || [],
+      available_transitions: _rvEffState === 'remediation_pending' ? ['re_reviewing'] : [],
     }}
   } catch (e: any) {
     // ONES SDK 异常可能不是标准 Error，把完整对象序列化用于诊断
@@ -2381,6 +2485,7 @@ export async function startReview(req: any): Promise<PluginResponse> {
   if (_startOp && (rv as any).creator_uuid && _startOp !== (rv as any).creator_uuid) {
     return { body: { error: '仅创建者可发起评审' }, statusCode: 403 }
   }
+  // canceled 兼容旧 status=draft，可通过本专用入口重新发起；不允许通过通用 transition 绕过这里的全部前置校验。
   if (rv.status !== 'draft') return { body: { error: '当前状态不可发起评审' }, statusCode: 400 }
 
   // 校验 0：前置依赖检查——前置阶段的决议必须为"通过"或"有条件通过"
@@ -2618,6 +2723,7 @@ export async function recallReview(req: any): Promise<PluginResponse> {
   })
   // canceled 的兼容 status = draft
   await review.set(rid, cleanForSet({ ...rv, ...stateFields }))
+  await releasePhaseGuard({ ...rv, review_uuid: rid })
 
   await writeAudit(rid, operator_uuid, '撤回评审', rid,
     `评审已撤回，回到草稿状态。原因：${reason || '未填写'}`)
@@ -2720,6 +2826,7 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
     attachments.push({
       file_name: ex.file_name || '',
       file_data: ex.file_data || '',
+      object_key: ex.file_data || '',
       file_size: Number(ex.file_size || 0),
       uploaded_by: ex.updated_by || '',
       uploaded_at: Number(ex.uploaded_at || 0),
@@ -2891,31 +2998,54 @@ export async function getMaterialPreview(req: any): Promise<PluginResponse> {
 // ============================================================
 // 历史附件下载/预览（按对象存储 key 直接获取，用于整改追加的旧版本文件）
 // ============================================================
+async function findAuthorizedAttachment(reviewUuid: string, objectKey: string): Promise<any | null> {
+  const materials = await qAll(matItem, (v: any) => v.review_uuid === reviewUuid)
+  for (const material of materials) {
+    if (material.file_data === objectKey) {
+      return {
+        object_key: objectKey,
+        file_name: material.file_name || 'unknown',
+        material_template_id: material.template_id || '',
+        current: true,
+      }
+    }
+    const attachments = jsonArr(material.attachments_json || '[]')
+    for (const attachment of attachments) {
+      const key = attachment.object_key || attachment.key || attachment.file_data || ''
+      if (key === objectKey) {
+        return {
+          object_key: objectKey,
+          file_name: attachment.file_name || attachment.name || 'unknown',
+          material_template_id: material.template_id || '',
+          current: false,
+        }
+      }
+    }
+  }
+  return null
+}
+
 export async function getAttachmentDownloadUrl(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const objKey = (getParam(req, 'object_key') || (req.query as any)?.object_key || '') as string
   if (!rid || !objKey) return { body: { error: '缺少 object_key' }, statusCode: 400 }
-  // 从材料实体的 attachments_json 中查找原始文件名
-  let fileName = ''
-  const allMats = await qAll(matItem, (v: any) => v.review_uuid === rid)
-  for (const m of allMats) {
-    const atts = jsonArr(m.attachments_json || '[]')
-    const found = atts.find((a: any) => a.object_key === objKey || a.key === objKey)
-    if (found) { fileName = found.file_name || found.name || ''; break }
-  }
+  const attachment = await findAuthorizedAttachment(rid, objKey)
+  if (!attachment) return { body: { code: 'ATTACHMENT_NOT_FOUND', error: '附件不存在或不属于当前评审' }, statusCode: 404 }
   const { object } = storage
   const result = await object.download(objKey) as any
   if (result?.code) {
     return { body: { error: `获取下载地址失败: ${result.message || result.code}` }, statusCode: 500 }
   }
-  return { body: { url: result.getWebUrl(), file_name: fileName }}
+  return { body: { url: result.getWebUrl(), file_name: attachment.file_name, material_template_id: attachment.material_template_id }}
 }
 
 export async function getAttachmentPreview(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const objKey = (getParam(req, 'object_key') || (req.query as any)?.object_key || '') as string
-  const fileName = (getParam(req, 'file_name') || (req.query as any)?.file_name || 'unknown') as string
   if (!rid || !objKey) return { body: { error: '缺少 object_key' }, statusCode: 400 }
+  const attachment = await findAuthorizedAttachment(rid, objKey)
+  if (!attachment) return { body: { code: 'ATTACHMENT_NOT_FOUND', error: '附件不存在或不属于当前评审' }, statusCode: 404 }
+  const fileName = attachment.file_name || 'unknown'
   const { object } = storage
   const result = await object.download(objKey) as any
   if (result?.code) {
@@ -3746,6 +3876,7 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   const fcLabel = normalizedFc === 'pass' ? '通过' : normalizedFc === 'conditional_pass' ? '有条件通过' : normalizedFc === 'fail' ? '不通过' : normalizedFc === 'rework' ? '返工' : '驳回'
   const stateFields = buildStateTransition(rv, targetState, puuid, `决议：${fcLabel}`)
   await review.set(rid, cleanForSet({ ...rv, ...stateFields }))
+  if (targetState === 'rejected') await releasePhaseGuard({ ...rv, review_uuid: rid })
   await writeAudit(rid, puuid, '发布决议', rid,
     `决议已发布: ${normalizedFc} [${snapshotNumber}]`)
 
@@ -4173,6 +4304,14 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
     return { body: { error: `非法状态流转: ${currentState} → ${target_state}` }, statusCode: 400 }
   }
 
+  // 外部通用状态接口只保留“整改完成后发起复审”这一业务命令。
+  // 其他状态必须由 startReview / publishResolution / recallReview 等专用入口产生。
+  if (target_state !== 're_reviewing' || currentState !== 'remediation_pending') {
+    await writeAudit(rid, operator_uuid, '非法状态流转', target_state,
+      `${currentState} → ${target_state}`, 'denied')
+    return { body: { code: 'STATE_TRANSITION_NOT_ALLOWED', error: '该状态只能通过对应业务操作产生' }, statusCode: 403 }
+  }
+
   // 权限校验：仅发起人可手动流转
   if ((rv as any).creator_uuid !== operator_uuid) {
     return { body: { error: '仅评审发起人可触发状态流转' }, statusCode: 403 }
@@ -4184,39 +4323,25 @@ export async function transitionReview(req: any): Promise<PluginResponse> {
     // 校验：所有整改项必须已完成
     const remediationItems = await qAll(linkedIssue,
       (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
-    if (remediationItems.length > 0) {
-      // 实时同步整改项状态
-      const tuid = getParam(req, 'team_uuid')
-      if (tuid) {
-        for (const item of remediationItems) {
-          try {
-            const taskRes = await OPFetch(
-              `/project/api/project/team/${tuid}/tasks/${item.issue_uuid}`,
-              { method: 'GET', teamUUID: tuid }
-            ) as any
-            const statusName = taskRes?.status?.name || taskRes?.data?.status?.name || taskRes?.status || ''
-            const statusID = taskRes?.status?.id || taskRes?.data?.status?.id || taskRes?.status_uuid || ''
-            if (statusName) {
-              const isDone = await checkStatusIsDone(tuid, statusID, statusName)
-              if (item.issue_status !== (statusName)) {
-                await linkedIssue.set(item._key, { ...item, issue_status: statusName })
-              }
-            }
-          } catch {}
-        }
-      }
-      // 重新读取同步后的整改项
-      const syncedItems = await qAll(linkedIssue,
-        (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
-      const notDone = syncedItems.filter((v: any) => !isIssueStatusDone(v.issue_status))
-      if (notDone.length > 0) {
-        return {
-          body: {
-            error: `仍有 ${notDone.length} 个整改项未完成，不可发起复审`,
-            pending: notDone.map((v: any) => v.issue_title || v.issue_uuid),
-          },
-          statusCode: 400,
-        }
+    if (remediationItems.length === 0) {
+      return { body: { error: '没有可核验的整改项，不可发起复审' }, statusCode: 400 }
+    }
+    const tuid = getParam(req, 'team_uuid')
+    if (!tuid) {
+      return { body: { code: 'REMEDIATION_STATUS_UNKNOWN', error: '无法获取 ONES 团队上下文，不能确认整改状态' }, statusCode: 409 }
+    }
+    for (const item of remediationItems) await refreshRemediationItem(tuid, item)
+    const syncedItems = await qAll(linkedIssue,
+      (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
+    const summary = summarizeRemediation(syncedItems)
+    if (summary.state !== 'done') {
+      return {
+        body: {
+          code: summary.state === 'unknown' ? 'REMEDIATION_STATUS_UNKNOWN' : 'REMEDIATION_NOT_DONE',
+          error: summary.state === 'unknown' ? '仍有整改项无法通过 ONES 权威状态确认' : `仍有 ${syncedItems.length - summary.doneCount} 个整改项未完成`,
+          pending: syncedItems.filter((v: any) => storedIssueCompletion(v) !== 'done').map((v: any) => v.issue_title || v.issue_uuid),
+        },
+        statusCode: 409,
       }
     }
 
@@ -4304,7 +4429,7 @@ export async function getReviewState(req: any): Promise<PluginResponse> {
   const history = jsonArr((rv as any).state_history_json || '[]')
 
   // 可流转到的目标状态
-  const availableTransitions = VALID_TRANSITIONS[currentState] || []
+  const availableTransitions = currentState === 'remediation_pending' ? ['re_reviewing'] : []
 
   return {
     body: {
@@ -4396,12 +4521,6 @@ function parseEvent(payload: any) {
   }
 }
 
-// 判断 issue_status 值是否属于"已完成"类型（关键词匹配，不依赖 category）
-const DONE_KEYWORDS = ['完成', '关闭', '已关闭', 'done', 'complete', 'closed', '已交付', 'resolved', '已解决']
-function isIssueStatusDone(status: string): boolean {
-  return DONE_KEYWORDS.some(k => (status || '').toLowerCase().includes(k.toLowerCase()))
-}
-
 // 兼容旧数据：旧版本把已完成状态名替换为 'done' 或硬编码 'open'，读取时还原
 function normalizeIssueStatus(status: string): string {
   if (status === 'done') return '已完成'
@@ -4409,28 +4528,95 @@ function normalizeIssueStatus(status: string): string {
   return status || ''
 }
 
-// 判断状态是否属于"已完成"类型（非状态名，是状态类型 category）
-async function checkStatusIsDone(teamUUID: string, statusID: string, statusName: string): Promise<boolean> {
-  // 方式一：GraphQL 反查 status category
-  if (teamUUID && statusID) {
-    try {
-      const res = await OPFetch(
-        `/project/api/project/team/${teamUUID}/items/graphql?t=statusCategory`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          data: { query: `{ issueStatus(uuid: "${statusID}") { uuid name category } }` },
-        }
-      ) as any
-      const category = res?.data?.issueStatus?.category
-      if (category !== undefined && category !== null) {
-        return Number(category) === 2 // 2 = 已完成
-      }
-    } catch {}
+type IssueCompletionState = 'done' | 'not_done' | 'unknown'
+
+function categoryToCompletion(category: any): IssueCompletionState {
+  if (typeof category === 'number') return category === 2 ? 'done' : 'not_done'
+  if (typeof category === 'string') {
+    const normalized = category.toLowerCase()
+    if (normalized === '2' || normalized === 'done' || normalized === 'closed' || normalized === 'completed') return 'done'
+    if (normalized === '0' || normalized === '1' || normalized === 'to_do' || normalized === 'todo' || normalized === 'in_progress' || normalized === 'open') return 'not_done'
   }
-  // 方式二：兜底——状态名关键词匹配
-  const doneKeywords = ['完成', '关闭', '已关闭', 'done', 'complete', 'closed', '已交付', 'resolved', '已解决']
-  return doneKeywords.some(k => statusName.toLowerCase().includes(k.toLowerCase()))
+  return 'unknown'
+}
+
+function storedIssueCompletion(item: any): IssueCompletionState {
+  if (item?.issue_status_verification !== 'verified') return 'unknown'
+  return item?.issue_status_is_done === true ? 'done' : 'not_done'
+}
+
+function summarizeRemediation(items: any[]): { state: IssueCompletionState; doneCount: number; unknownCount: number } {
+  if (items.length === 0) return { state: 'unknown', doneCount: 0, unknownCount: 0 }
+  let doneCount = 0
+  let unknownCount = 0
+  for (const item of items) {
+    const state = storedIssueCompletion(item)
+    if (state === 'done') doneCount++
+    if (state === 'unknown') unknownCount++
+  }
+  return {
+    state: unknownCount > 0 ? 'unknown' : doneCount === items.length ? 'done' : 'not_done',
+    doneCount,
+    unknownCount,
+  }
+}
+
+async function fetchIssueStatus(teamUUID: string, issueUUID: string): Promise<any | null> {
+  if (!teamUUID || !issueUUID) return null
+  try {
+    const query = `query findTasks($filter: TasksFilter) { tasks(filter: $filter) { uuid status { uuid name category } } }`
+    const res = await OPFetch(
+      `/project/api/project/team/${teamUUID}/items/graphql?t=dcpIssueStatus`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        data: { query, variables: { filter: { uuid_in: [issueUUID] } } },
+        teamUUID,
+      } as any,
+    ) as any
+    const tasks = res?.data?.tasks || res?.data?.data?.tasks || res?.tasks || []
+    const task = Array.isArray(tasks) ? tasks.find((v: any) => v.uuid === issueUUID) : null
+    if (!task?.status) return null
+    return {
+      issue_uuid: issueUUID,
+      status_id: task.status.uuid || task.status.id || '',
+      status_name: task.status.name || '',
+      category: task.status.category,
+      completion: categoryToCompletion(task.status.category),
+    }
+  } catch (e: any) {
+    Logger.info(`[DCP] issue status lookup unavailable: ${e?.message || e}`)
+    return null
+  }
+}
+
+function issueStatusFields(info: any, source: string, error = ''): Record<string, any> {
+  const completion = info?.completion || 'unknown'
+  return {
+    issue_status: info?.status_name || '',
+    issue_status_id: info?.status_id || '',
+    issue_status_category: info?.category === undefined || info?.category === null ? '' : String(info.category),
+    issue_status_is_done: completion === 'done',
+    issue_status_verification: completion === 'unknown' ? 'unknown' : 'verified',
+    issue_status_source: source,
+    issue_status_checked_at: Date.now(),
+    issue_status_error: error || '',
+  }
+}
+
+async function refreshRemediationItem(teamUUID: string, item: any): Promise<any> {
+  const info = await fetchIssueStatus(teamUUID, item.issue_uuid)
+  const fields = info
+    ? issueStatusFields(info, 'server_api')
+    : {
+      issue_status_verification: 'unknown',
+      issue_status_source: 'unverified',
+      issue_status_checked_at: Date.now(),
+      issue_status_error: '无法从 ONES 权威接口确认工作项状态',
+    }
+  const { _key, ...rest } = item
+  await linkedIssue.set(item._key, { ...rest, ...fields })
+  return { ...item, ...fields }
 }
 
 // 事件 handler — 工作项状态变更
@@ -4448,23 +4634,32 @@ export async function onIssueStatusChanged(payload: any) {
       (v: any) => v.issue_uuid === issueID && v.link_type === 'remediation')
     if (items.length === 0) return { body: {} }
 
-    // 判断新状态是否属于"已完成"类型
-    const isDone = await checkStatusIsDone(teamUUID, newStatus.id || '', newStatus.name || '')
+    // 事件中的 category 是 ONES 权威状态；缺失时不猜测，标记为 unknown。
+    let eventInfo: any = {
+      status_id: newStatus.id || newStatus.uuid || '',
+      status_name: newStatus.name || '',
+      category: newStatus.category,
+      completion: categoryToCompletion(newStatus.category),
+    }
+    if (eventInfo.completion === 'unknown') {
+      eventInfo = await fetchIssueStatus(teamUUID, issueID) || eventInfo
+    }
+    const completion = eventInfo.completion as IssueCompletionState
 
     // 更新快照（通常只有一条记录）
     for (const item of items) {
+      const fields = issueStatusFields(eventInfo, 'event')
       await linkedIssue.set(item._key, {
-        ...item,
-        issue_status: newStatus.name || '',
+        ...item, ...fields,
       })
     }
 
     // 如果是已完成，检查该评审单所有整改项是否全部完成
-    if (isDone) {
+    if (completion === 'done') {
       const rid = items[0].review_uuid
       const allRemediation = await qAll(linkedIssue,
         (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
-      const allDone = allRemediation.every((v: any) => isIssueStatusDone(v.issue_status))
+      const allDone = summarizeRemediation(allRemediation).state === 'done'
 
       if (allDone) {
         // 通知决议人 + 评审发起人
@@ -4509,15 +4704,17 @@ export async function getRemediationIssues(req: any): Promise<PluginResponse> {
     (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
   items.sort((a: any, b: any) => (a.linked_at || 0) - (b.linked_at || 0))
 
-  const allDone = items.length > 0 && items.every((v: any) => isIssueStatusDone(v.issue_status))
+  const summary = summarizeRemediation(items)
   const itemsNormalized = items.map((v: any) => ({ ...v, issue_status: normalizeIssueStatus(v.issue_status) }))
 
   return {
     body: {
       items: itemsNormalized,
       total: itemsNormalized.length,
-      done_count: itemsNormalized.filter((v: any) => isIssueStatusDone(v.issue_status)).length,
-      all_done: allDone,
+      done_count: summary.doneCount,
+      unknown_count: summary.unknownCount,
+      status_state: summary.state,
+      all_done: summary.state === 'done',
     }
   }
 }
@@ -4532,48 +4729,33 @@ export async function refreshRemediationStatus(req: any): Promise<PluginResponse
   const items = await qAll(linkedIssue,
     (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
 
-  for (const item of items) {
-    try {
-      const res = await OPFetch(
-        `/project/api/project/team/${tuid}/tasks/${item.issue_uuid}`,
-        { method: 'GET', teamUUID: tuid }
-      ) as any
-      const statusName = res?.status?.name || res?.data?.status?.name || res?.status || ''
-      const statusID = res?.status?.id || res?.data?.status?.id || res?.status_uuid || ''
-      if (statusName) {
-        const isDone = await checkStatusIsDone(tuid, statusID, statusName)
-        await linkedIssue.set(item._key, {
-          ...item,
-          issue_status: statusName,
-        })
-      }
-    } catch {}
-  }
+  for (const item of items) await refreshRemediationItem(tuid, item)
 
   const updated = await qAll(linkedIssue,
     (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
-  const allDone = updated.length > 0 && updated.every((v: any) => isIssueStatusDone(v.issue_status))
+  const summary = summarizeRemediation(updated)
   const updatedNormalized = updated.map((v: any) => ({ ...v, issue_status: normalizeIssueStatus(v.issue_status) }))
 
   return {
     body: {
       items: updatedNormalized,
       total: updatedNormalized.length,
-      done_count: updatedNormalized.filter((v: any) => isIssueStatusDone(v.issue_status)).length,
-      all_done: allDone,
+      done_count: summary.doneCount,
+      unknown_count: summary.unknownCount,
+      status_state: summary.state,
+      all_done: summary.state === 'done',
     }
   }
 }
 
-// POST /review/:review_uuid/remediation/sync — 前端浏览器查询工作项实时状态后，批量同步到实体存储
-// 绕过 OPFetch 不可达问题：前端用浏览器 fetch 查 tasks API，将结果传给后端更新 linkedIssue
+// POST /review/:review_uuid/remediation/sync — 客户端状态仅作观察值，服务端验证成功后才写权威完成状态
 export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
   try {
   const rid = getParam(req, 'review_uuid')
   if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
   const tuid = getParam(req, 'team_uuid')
   const b = (req.body || {}) as any
-  const items: Array<{ issue_uuid: string; status_name: string; status_id?: string; is_done?: boolean }> = b.items || []
+  const items: Array<{ issue_uuid: string; status_name?: string; status_id?: string; category?: string | number; is_done?: boolean }> = b.items || []
   if (!Array.isArray(items) || items.length === 0) {
     return { body: { error: '缺少 items 数组' }, statusCode: 400 }
   }
@@ -4587,25 +4769,33 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
     const linked = allLinked.find((l: any) => l.issue_uuid === item.issue_uuid)
     if (!linked) continue
 
-    // 判断是否已完成：前端传 is_done 优先，否则用关键词兜底
-    let isDone = false
-    if (typeof item.is_done === 'boolean') {
-      isDone = item.is_done
-    } else if (tuid && item.status_id) {
-      isDone = await checkStatusIsDone(tuid, item.status_id, item.status_name || '')
-    } else {
-      const doneKeywords = ['完成', '关闭', '已关闭', 'done', 'complete', 'closed', '已交付', 'resolved', '已解决']
-      isDone = doneKeywords.some(k => (item.status_name || '').toLowerCase().includes(k.toLowerCase()))
-    }
-
-    const newStatus = item.status_name || ''
-    if (linked.issue_status !== newStatus) {
-      // 必须剥离 _key，否则 ONES 实体 API 报 EntityDataValueAttrNotFound → 500
-      const { _key, ...rest } = linked
-      await linkedIssue.set(linked._key, {
-        ...rest,
-        issue_status: newStatus,
-      })
+    // 客户端状态只能作为观察值；完成与否必须由服务端重新从 ONES 校验。
+    const authoritative = tuid ? await fetchIssueStatus(tuid, item.issue_uuid) : null
+    const fields = authoritative
+      ? issueStatusFields(authoritative, 'server_api')
+      : linked.issue_status_verification === 'verified'
+        ? {
+          issue_status: linked.issue_status || '',
+          issue_status_id: linked.issue_status_id || '',
+          issue_status_category: linked.issue_status_category || '',
+          issue_status_is_done: linked.issue_status_is_done === true,
+          issue_status_verification: 'verified',
+          issue_status_source: linked.issue_status_source || 'event',
+          issue_status_checked_at: linked.issue_status_checked_at || 0,
+          issue_status_error: '',
+        }
+      : {
+        issue_status: item.status_name || linked.issue_status || '',
+        issue_status_id: item.status_id || linked.issue_status_id || '',
+        issue_status_category: item.category === undefined ? (linked.issue_status_category || '') : String(item.category),
+        issue_status_verification: 'unknown',
+        issue_status_source: 'client_observed',
+        issue_status_checked_at: Date.now(),
+        issue_status_error: '客户端状态未通过服务端权威校验',
+      }
+    const { _key, ...rest } = linked
+    await linkedIssue.set(linked._key, { ...rest, ...fields })
+    if (linked.issue_status !== fields.issue_status || linked.issue_status_verification !== fields.issue_status_verification) {
       updatedCount++
     }
   }
@@ -4613,7 +4803,8 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
   // 返回更新后的数据
   const updated = await qAll(linkedIssue,
     (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
-  const allDone = updated.length > 0 && updated.every((v: any) => isIssueStatusDone(v.issue_status))
+  const summary = summarizeRemediation(updated)
+  const allDone = summary.state === 'done'
 
   // 全部整改项刚完成时通知决议人 + 评审发起人
   if (allDone && updatedCount > 0) {
@@ -4647,7 +4838,9 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
       updated_count: updatedCount,
       items: updated.map((v: any) => ({ ...v, issue_status: normalizeIssueStatus(v.issue_status) })),
       total: updated.length,
-      done_count: updated.filter((v: any) => isIssueStatusDone(v.issue_status)).length,
+      done_count: summary.doneCount,
+      unknown_count: summary.unknownCount,
+      status_state: summary.state,
       all_done: allDone,
     }
   }
@@ -4692,42 +4885,27 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
     return { body: { error: '请先创建或关联整改工作项' }, statusCode: 400 }
   }
 
-  // 实时同步整改项状态（不依赖事件 handler 快照）
-  if (tuid) {
-    for (const item of items) {
-      try {
-        const res = await OPFetch(
-          `/project/api/project/team/${tuid}/tasks/${item.issue_uuid}`,
-          { method: 'GET', teamUUID: tuid }
-        ) as any
-        const statusName = res?.status?.name || res?.data?.status?.name || res?.status || ''
-        const statusID = res?.status?.id || res?.data?.status?.id || res?.status_uuid || ''
-        if (statusName) {
-          const isDone = await checkStatusIsDone(tuid, statusID, statusName)
-          if (item.issue_status !== (statusName)) {
-            await linkedIssue.set(item._key, {
-              ...item,
-              issue_status: statusName,
-            })
-          }
-        }
-      } catch {}
-    }
+  // 实时同步整改项状态；不能依赖事件快照或客户端传入的 is_done。
+  if (!tuid) {
+    return { body: { code: 'REMEDIATION_STATUS_UNKNOWN', error: '无法获取 ONES 团队上下文，不能确认整改状态' }, statusCode: 409 }
   }
+  for (const item of items) await refreshRemediationItem(tuid, item)
 
   // 重新读取同步后的整改项
   const syncedItems = await qAll(linkedIssue,
     (v: any) => v.review_uuid === rid && v.link_type === 'remediation')
 
   // 校验：所有整改项已完成
-  const notDone = syncedItems.filter((v: any) => !isIssueStatusDone(v.issue_status))
-  if (notDone.length > 0) {
+  const summary = summarizeRemediation(syncedItems)
+  const notDone = syncedItems.filter((v: any) => storedIssueCompletion(v) !== 'done')
+  if (summary.state !== 'done') {
     return {
       body: {
-        error: `仍有 ${notDone.length} 个整改项未完成`,
+        code: summary.state === 'unknown' ? 'REMEDIATION_STATUS_UNKNOWN' : 'REMEDIATION_NOT_DONE',
+        error: summary.state === 'unknown' ? '仍有整改项无法通过 ONES 权威状态确认' : `仍有 ${notDone.length} 个整改项未完成`,
         pending: notDone.map((v: any) => v.issue_title || v.issue_uuid),
       },
-      statusCode: 400
+      statusCode: 409
     }
   }
 

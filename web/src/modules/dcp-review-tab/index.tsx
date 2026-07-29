@@ -269,7 +269,17 @@ const App: React.FC = () => {
       setSelectedReviewUuid(res.review_uuid)
       await loadDetail(res.review_uuid)
       if (memberSyncError) setMsg(`评审单已创建，但${memberSyncError}`)
-    } catch (e: any) { setMsg(`创建失败: ${e.message}`) }
+    } catch (e: any) {
+      const code = e?.data?.code
+      if (e?.status === 409 && code === 'REVIEW_PHASE_ALREADY_ACTIVE') {
+        setMsg(`${e.message}（请返回列表打开已有评审单）`)
+      } else if (e?.status === 409 && code === 'REVIEW_PHASE_ALREADY_PASSED') {
+        setMsg(`${e.message}（该阶段只能继续后续阶段，不能再次新建）`)
+      } else {
+        setMsg(`创建失败: ${e.message}`)
+      }
+      await loadList(projectUuid)
+    }
   }
 
   async function handleStart(rid: string) {
@@ -996,7 +1006,6 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
       await syncRemediationFromBrowser()
       await api.transitionReview(rv.review_uuid, {
         target_state: 're_reviewing',
-        operator_uuid: currentUser.uuid,
         reason: '发起复审',
       })
       setShowReReviewConfirm(false)
@@ -1038,13 +1047,8 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
           const statusId = task?.status?.uuid || ''
           const category = task?.status?.category
           // category 是字符串: "to_do"/"in_progress"/"done"
-          const isDone = typeof category === 'string'
-            ? category === 'done' || category === 'closed'
-            : typeof category === 'number'
-              ? category === 2
-              : undefined
           if (statusName) {
-            syncItems.push({ issue_uuid: task.uuid, status_name: statusName, status_id: statusId, is_done: isDone })
+            syncItems.push({ issue_uuid: task.uuid, status_name: statusName, status_id: statusId, category })
           }
         }
       }
@@ -1074,14 +1078,13 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
     finally { setRemediationRefreshing(false) }
   }
 
-  async function handleConfirmRemediation(nextAction: 'complete' | 're_review') {
+  async function handleConfirmRemediation(nextAction: 're_review') {
     setRemediationConfirming(true)
     setRemediationMsg('')
     try {
       // 先同步整改项状态，确保后端读到最新状态
       await syncRemediationFromBrowser()
       await api.confirmRemediation(rv.review_uuid, {
-        publisher_uuid: currentUser.uuid || '',
         next_action: nextAction,
       })
       setShowRemediationConfirm(false)
