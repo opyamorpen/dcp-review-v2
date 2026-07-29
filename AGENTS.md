@@ -13,6 +13,23 @@ npm run packup                 # 打包 .opk
 
 构建前必清缓存：`rm -rf node_modules/.cache web/dist`，否则 dist JS hash 不变 = 旧代码。
 
+## 强制开发交付闭环
+
+所有需求开发和 Bug 修复都必须完成以下流程后才能交付：
+
+1. 修改代码并完成必要的类型检查、测试。
+2. 构建前清理缓存：`rm -rf node_modules/.cache web/dist`。
+3. 执行 `npm run packup`，确认 OPK 打包成功。
+4. 执行 `./scripts/deploy.sh <opk文件>` 部署到 demo688。
+5. 使用浏览器验证真实页面和用户流程，不能只以构建或部署成功作为完成依据。
+6. 创建功能分支，提交全部相关修改并推送到 GitHub。
+7. 创建目标为 `main` 的 Pull Request。
+8. 等待 GitHub CI 的 `validate` 检查通过。
+9. CI 通过后合并 PR 到 `main`。
+10. 合并后同步本地 `main`，确认工作区干净并汇报最终提交号。
+
+任一步失败或无法验证，都必须明确报告为 pending/blocked，不能声称任务已完成。
+
 ## 技术栈
 
 - 前端：React 17 + TypeScript + Webpack（模块：dcp-review-tab、dcp-reviewer-workspace、dcp-sidebar 含子模块 dcp-template-config / dcp-review-overview、dcp-config-page、dcp-team-overview）
