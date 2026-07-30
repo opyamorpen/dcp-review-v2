@@ -22,6 +22,8 @@ export const RemediationPanel: React.FC<{
   isCreator: boolean
   isPublisher: boolean
   remediationIssueType: string
+  remediationTypeStatus: 'loading' | 'available' | 'missing' | 'unknown' | 'unconfigured'
+  remediationTypeMessage: string
   projectUuid: string
   remediationMsg: string
   remediationRefreshing: boolean
@@ -51,6 +53,9 @@ export const RemediationPanel: React.FC<{
   const allDone = data.remediation_all_done
   const remediationStatusState = data.remediation_status_state || (allDone ? 'done' : 'unknown')
   const isRemediationPhase = effState === 'remediation_pending'
+  const creationBlocked = props.remediationTypeStatus === 'loading'
+    || props.remediationTypeStatus === 'missing'
+    || props.remediationTypeStatus === 'unknown'
 
   // 工作项列表（全部），用 badge 区分类型
   const issueRows = allIssues.map((iss: any, i: number) => {
@@ -86,13 +91,18 @@ export const RemediationPanel: React.FC<{
       {props.remediationMsg && (
         <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#cf1322' }}>{props.remediationMsg}</div>
       )}
+      {props.remediationTypeMessage && (
+        <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#cf1322', border: '1px solid #ffccc7' }}>
+          {props.remediationTypeMessage}
+        </div>
+      )}
 
       {allIssues.length === 0 ? (
         <div style={{ color: '#999', padding: 24, textAlign: 'center', background: '#fafafa', borderRadius: 8, marginBottom: 16 }}>
           暂无工作项
           {(isRemediationPhase || effState === 'reviewing' || effState === 'awaiting_resolution') && (
             <div style={{ marginTop: 8 }}>
-              <button style={S.btn(true)} onClick={() => { props.onSetShowCreateRemediation(true); props.onSetRemediationMsg('') }}>+ 创建工作项</button>
+              <button style={S.btn(true, creationBlocked)} disabled={creationBlocked} onClick={() => { props.onSetShowCreateRemediation(true); props.onSetRemediationMsg('') }}>+ 创建工作项</button>
               <button style={{ ...S.btn(false), marginLeft: 8 }} onClick={() => { props.onSetShowLinkRemediation(true); props.onSetRemediationMsg('') }}>关联已有工作项</button>
             </div>
           )}
@@ -110,7 +120,7 @@ export const RemediationPanel: React.FC<{
 
           {(isRemediationPhase || effState === 'reviewing' || effState === 'awaiting_resolution') && (
             <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button style={S.btn(true)} onClick={() => { props.onSetShowCreateRemediation(true); props.onSetRemediationMsg('') }}>+ 创建工作项</button>
+              <button style={S.btn(true, creationBlocked)} disabled={creationBlocked} onClick={() => { props.onSetShowCreateRemediation(true); props.onSetRemediationMsg('') }}>+ 创建工作项</button>
               <button style={S.btn(false)} onClick={() => { props.onSetShowLinkRemediation(true); props.onSetRemediationMsg('') }}>关联已有工作项</button>
             </div>
           )}
@@ -143,13 +153,13 @@ export const RemediationPanel: React.FC<{
             <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>标题 *</label>
             <input style={S.input} value={props.createRemediationForm.title}
               onChange={e => props.onSetCreateRemediationForm({ title: e.target.value })}
-              placeholder="整改项标题" disabled={props.creatingRemediation} />
+              placeholder="整改项标题" disabled={props.creatingRemediation || creationBlocked} />
           </div>
           {props.remediationIssueType && (
             <div style={{ fontSize: 12, color: '#999', marginBottom: 8 }}>类型将自动预填：{props.remediationIssueType}</div>
           )}
           <div style={{ display: 'flex', gap: 8 }}>
-            <button style={S.btn(true)} onClick={props.onCreateRemediation} disabled={props.creatingRemediation}>
+            <button style={S.btn(true, creationBlocked || props.creatingRemediation)} onClick={props.onCreateRemediation} disabled={props.creatingRemediation || creationBlocked}>
               {props.creatingRemediation ? '创建中…' : '创建'}
             </button>
             <button style={S.btn(false)} onClick={() => { props.onSetShowCreateRemediation(false); props.onSetRemediationMsg('') }}>取消</button>

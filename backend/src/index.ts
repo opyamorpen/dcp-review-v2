@@ -1535,7 +1535,7 @@ function buildStateTransition(rv: any, newState: string, by: string, reason: str
 // 配置
 // ============================================================
 export async function getPluginConfig(_req: any): Promise<PluginResponse> {
-  const keys = ['default_resolution_template', 'remediation_issue_type']
+  const keys = ['default_resolution_template', 'remediation_issue_type', 'remediation_issue_type_uuid']
   const config: any = {}
   for (const k of keys) {
     const v = await baseCfg.get(k)
@@ -3653,6 +3653,97 @@ export async function submitOpinion(req: any): Promise<PluginResponse> {
 // ============================================================
 // 关联工作项
 // ============================================================
+type ProjectIssueTypeInfo = {
+  scope_uuid: string
+  issue_type_uuid: string
+  name: string
+}
+
+type ProjectIssueTypesLookup = {
+  project_uuid: string
+  types: ProjectIssueTypeInfo[]
+  verified: boolean
+}
+
+function normalizeProjectIssueTypes(raw: any[]): ProjectIssueTypeInfo[] {
+  return raw.map((item: any) => ({
+    scope_uuid: item.uuid || item.scope_uuid || '',
+    issue_type_uuid: item.issue_type_uuid || item.uuid || '',
+    name: item.name || item.issue_type_name || item.type_name || item.display_name || '',
+  })).filter((item: ProjectIssueTypeInfo) => item.name)
+}
+
+async function getConfiguredRemediationIssueType(): Promise<{ name: string; uuid: string }> {
+  const [nameRow, uuidRow] = await Promise.all([
+    baseCfg.get('remediation_issue_type'),
+    baseCfg.get('remediation_issue_type_uuid'),
+  ])
+  return {
+    name: String((nameRow as any)?.value || ''),
+    uuid: String((uuidRow as any)?.value || ''),
+  }
+}
+
+function findConfiguredProjectIssueType(
+  types: ProjectIssueTypeInfo[],
+  configured: { name: string; uuid: string },
+): ProjectIssueTypeInfo | undefined {
+  if (configured.uuid) {
+    const byUuid = types.find(item =>
+      item.issue_type_uuid === configured.uuid || item.scope_uuid === configured.uuid)
+    if (byUuid) return byUuid
+  }
+  return configured.name ? types.find(item => item.name === configured.name) : undefined
+}
+
+async function getProjectIssueTypes(teamUuid: string, projectRef: string): Promise<ProjectIssueTypesLookup> {
+  let projectUuid = projectRef
+  try {
+    const exchangeRes = await OPFetch(
+      `/project/api/ones-project/team/${teamUuid}/projects/exchange/${projectRef}`,
+      { teamUUID: teamUuid },
+    ) as any
+    projectUuid = exchangeRes?.data?.project_uuid || exchangeRes?.project_uuid || projectRef
+  } catch {}
+
+  try {
+    const stampRes = await OPFetch(
+      `/project/api/project/team/${teamUuid}/project/${projectUuid}/stamps/data?t=issue_type_config`,
+      {
+        method: 'POST',
+        teamUUID: teamUuid,
+        headers: { 'Content-Type': 'application/json' },
+        data: { issue_type_config: Date.now() },
+      },
+    ) as any
+    const root = stampRes?.data || stampRes || {}
+    const config = root.issue_type_config
+    let raw: any[] | null = null
+    if (Array.isArray(config)) raw = config
+    else if (config && Array.isArray(config.issue_type_configs)) raw = config.issue_type_configs
+    else if (config && Array.isArray(config.issue_types)) raw = config.issue_types
+    if (raw) return { project_uuid: projectUuid, types: normalizeProjectIssueTypes(raw), verified: true }
+  } catch {}
+
+  try {
+    const gqlRes = await OPFetch(`/project/api/project/team/${teamUuid}/items/graphql?t=projectIssueTypes`, {
+      method: 'POST',
+      teamUUID: teamUuid,
+      headers: { 'Content-Type': 'application/json' },
+      data: {
+        query: `{ project(key: "project-${projectUuid}") { issueTypes { uuid name } } }`,
+        variables: {},
+      },
+    }) as any
+    const raw = gqlRes?.data?.project?.issueTypes
+    if (Array.isArray(raw)) {
+      return { project_uuid: projectUuid, types: normalizeProjectIssueTypes(raw), verified: true }
+    }
+  } catch {}
+
+  return { project_uuid: projectUuid, types: [], verified: false }
+}
+
 export async function linkIssue(req: any): Promise<PluginResponse> {
   const rid = getParam(req, 'review_uuid')
   const b = (req.body || {}) as any
@@ -3761,9 +3852,30 @@ export async function createIssue(req: any): Promise<PluginResponse> {
     if (exchRes?.data?.project_uuid || exchRes?.project_uuid) projectID = exchRes?.data?.project_uuid || exchRes?.project_uuid
   } catch {}
 
-  // 创建时使用全局 issue_type_uuid（成功 HAR 证实 tasks/add3 用全局 UUID）
-  const typeUuid = issue_type_uuid || ''
-  const typeScopeUuid = issue_type_scope_uuid || ''
+  // 配置了整改默认类型时，只允许使用当前项目已启用的对应类型。
+  const configuredType = await getConfiguredRemediationIssueType()
+  let selectedProjectType: ProjectIssueTypeInfo | undefined
+  if (configuredType.name || configuredType.uuid) {
+    const lookup = await getProjectIssueTypes(tuid, projectID)
+    projectID = lookup.project_uuid
+    if (!lookup.verified) {
+      return { body: {
+        code: 'REMEDIATION_ISSUE_TYPE_UNVERIFIED',
+        error: '无法确认当前项目的工作项类型，不允许新建整改项。请刷新后重试。',
+      }, statusCode: 409 }
+    }
+    selectedProjectType = findConfiguredProjectIssueType(lookup.types, configuredType)
+    if (!selectedProjectType) {
+      return { body: {
+        code: 'REMEDIATION_ISSUE_TYPE_NOT_AVAILABLE',
+        error: `当前项目未添加 DCP 评审中心配置的整改工作项类型「${configuredType.name || configuredType.uuid}」，不允许新建。请先在项目设置中添加该类型，或调整 DCP 评审中心的整改设置。`,
+      }, statusCode: 409 }
+    }
+  }
+
+  // tasks/add3 使用全局工作项类型 UUID；历史名称配置由项目类型匹配结果补齐 UUID。
+  const typeUuid = selectedProjectType?.issue_type_uuid || issue_type_uuid || ''
+  const typeScopeUuid = selectedProjectType?.scope_uuid || issue_type_scope_uuid || ''
 
   try {
     let res: any = null
@@ -3849,11 +3961,13 @@ export async function createIssue(req: any): Promise<PluginResponse> {
       issue_uuid: issueUuid,
       issue_number: issueNumber,
       issue_title: title,
-      issue_type: issue_type_uuid || typeScopeUuid || '',
+      issue_type: selectedProjectType?.name || issue_type_uuid || typeScopeUuid || '',
       issue_status: '',
       linked_by: _createIssueOp || b.linked_by || assignee_uuid || rv.creator_uuid || '',
       linked_by_name: b.linked_by_name || '',
       linked_at: Date.now(),
+      link_type: 'remediation',
+      round_no: (rv as any).round_no || 1,
     })
 
     await writeAudit(rid, _createIssueOp || assignee_uuid || rv.creator_uuid || '', '创建工作项', issueUuid,
@@ -4423,94 +4537,18 @@ export async function listIssueTypes(req: any): Promise<PluginResponse> {
   const puid = getParam(req, 'project_uuid')
   if (!tuid || !puid) return { body: { error: '缺少 team_uuid 或 project_uuid' }, statusCode: 400 }
 
-  // 解析项目真实 UUID
-  let projectID = puid
-  try {
-    const exchRes = await OPFetch(
-      `/project/api/ones-project/team/${tuid}/projects/exchange/${projectID}`,
-      { teamUUID: tuid }
-    ) as any
-    if (exchRes?.data?.project_uuid || exchRes?.project_uuid) projectID = exchRes?.data?.project_uuid || exchRes?.project_uuid
-  } catch {}
-
-  // 多路径级联获取工作项类型（不同 ONES 版本路径不同）
-  const internalPaths = [
-    `/project/api/project/team/${tuid}/projects/${projectID}/work_item_types`,
-    `/project/api/project/team/${tuid}/projects/${projectID}/task_types`,
-    `/project/api/project/team/${tuid}/projects/${projectID}/types`,
-    `/project/api/project/team/${tuid}/projects/${projectID}/setting/task_types`,
-    `/project/api/project/team/${tuid}/projects/${projectID}/field-config/types`,
-    `/project/api/project/team/${tuid}/work_item_types`,
-    `/project/api/project/team/${tuid}/task_types`,
-    `/project/api/project/team/${tuid}/items/types`,
-  ]
-
-  // 方式一：ONES 内部 API（OPFetch 自动鉴权）— 优先 GraphQL
-  let types: any[] = []
-
-  // GraphQL 端点（HAR 验证在 demo688 可用）
-  try {
-    const gqlRes = await OPFetch(`/project/api/project/team/${tuid}/items/graphql?t=issueTypes`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      data: { query: '{ issueTypes(orderBy: { namePinyin: ASC }) { uuid name } }', variables: {} },
-    }) as any
-    const raw = gqlRes?.data?.issueTypes || []
-    if (Array.isArray(raw) && raw.length > 0) {
-      types = raw.map((t: any) => ({ uuid: t.uuid || '', name: t.name || '' })).filter((t: any) => t.name)
-    }
-  } catch {}
-
-  // 传统 REST 多路径级联
-  if (types.length === 0) {
-    for (const path of internalPaths) {
-    if (types.length > 0) break
-    try {
-      const res = await OPFetch(path) as any
-      const data = res?.data || res || {}
-      const raw = data.work_item_types || data.task_types || data.types || data.items || data.list || data.results || data.data || data || []
-      if (Array.isArray(raw) && raw.length > 0) {
-        types = raw.map((t: any) => ({
-          uuid: t.uuid || t.issue_type_uuid || t.id || '',
-          name: t.name || t.issue_type_name || t.type_name || t.display_name || '',
-        })).filter((t: any) => t.name)
-        if (types.length > 0) break
-      }
-    } catch {}
-  }
-  }
-
-  if (types.length > 0) {
-    return { body: { issue_types: types } }
-  }
-
-  // 方式二：Open API v2/v1（需要 Bearer token + origin）
-  const origin = (req.body || {}).ones_origin || ''
-  if (!origin) return { body: { issue_types: [] } }
-
-  try {
-    const token = await getOpenApiToken({ teamID: tuid })
-    let res: any = null
-    try {
-      res = await OPFetch(`${origin}/openapi/v2/project/issueTypes?teamID=${tuid}`, {
-        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      }) as any
-    } catch {}
-    if (!res?.data?.issue_types?.length) {
-      try {
-        res = await OPFetch(`${origin}/openapi/v1/project/issueTypes?teamID=${tuid}`, {
-          headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        }) as any
-      } catch {}
-    }
-    const raw = res?.data?.issue_types || res?.data || []
-    types = raw.map((t: any) => ({
-      uuid: t.uuid || t.issue_type_uuid,
-      name: t.name || t.issue_type_name,
-    }))
-  } catch {}
-
-  return { body: { issue_types: types } }
+  const lookup = await getProjectIssueTypes(tuid, puid)
+  const issueTypes = lookup.types.map(item => ({
+    uuid: item.issue_type_uuid,
+    scope_uuid: item.scope_uuid,
+    issue_type_uuid: item.issue_type_uuid,
+    name: item.name,
+  }))
+  return { body: {
+    issue_types: issueTypes,
+    verified: lookup.verified,
+    project_uuid: lookup.project_uuid,
+  }}
 }
 
 // ============================================================
