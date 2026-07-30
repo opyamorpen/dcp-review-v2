@@ -35,8 +35,8 @@ sections.append(ul([
     'Special linked issues with link_type = remediation.',
     'Created after resolution to track corrective actions.',
     'Status changes monitored via ONES event hooks.',
-    'All done -> review can transition to completed.',
-    'Locked items cannot be deleted while locked.',
+    'All done -> review can enter re-review.',
+    'Items are not locked; incomplete or unknown status blocks re-review.',
 ]))
 
 # ==== Chapter 10: Audit Trail ====
