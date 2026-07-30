@@ -91,11 +91,10 @@ def build_content_p3(pdf: ManualPDF):
     pdf.bullet('Issue status changes are monitored via event hooks (onIssueStatusChanged).')
     pdf.bullet('When all remediation items are completed:')
     pdf.bullet('The publisher can confirm remediation completion.', indent=10)
-    pdf.bullet('The review transitions to "Completed" state.', indent=10)
-    pdf.bullet('Alternatively, trigger a re-review (enters re_reviewing state with a new round).', indent=10)
+    pdf.bullet('The review enters re_reviewing with a new round.', indent=10)
     pdf.body(
-        'Remediation work items have special locking: they cannot be deleted or have their '
-        'status changed through normal work item operations when locked (enforced by TaskEventHandler).'
+        'Remediation work items remain editable under normal ONES permissions. The plugin does not '
+        'lock them; it tracks authoritative completion status and blocks re-review until all are done.'
     )
 
     pdf.sub_title('5.8 Round Comparison')

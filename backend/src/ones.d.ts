@@ -122,6 +122,7 @@ declare var ONESEntities: {
             risk_color?: string;
             updated_by?: string;
             updated_at?: number;
+            round_no?: number;
             indicator_name?: string;
             threshold_type?: string;
             yellow_threshold?: number;

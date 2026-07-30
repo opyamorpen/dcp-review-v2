@@ -105,7 +105,6 @@ const S: Record<string, any> = {
 // ============================================================
 const App: React.FC = () => {
   const [projectUuid, setProjectUuid] = useState('')
-  const [projectAliases, setProjectAliases] = useState<string[]>([])
   const [projectKey, setProjectKey] = useState('')
   const [projectName, setProjectName] = useState('')
   const [componentUuid, setComponentUuid] = useState('')
@@ -118,7 +117,7 @@ const App: React.FC = () => {
   const [selectedReviewUuid, setSelectedReviewUuid] = useState('')
   const [msg, setMsg] = useState('')
   const [phases, setPhases] = useState<any[]>([])
-  const [passedPhases, setPassedPhases] = useState<string[]>([])
+  const [passedPhasesByType, setPassedPhasesByType] = useState<Record<string, string[]>>({ dcp: [], tr: [] })
   const [ipdFlowLayout, setIpdFlowLayout] = useState<any>(null)
   const [allReviews, setAllReviews] = useState<any[]>([])
   const [currentUser, setCurrentUser] = useState<{ uuid: string; name: string }>({ uuid: '', name: '' })
@@ -181,8 +180,7 @@ const App: React.FC = () => {
               if (realUuid) {
                 // 评审绑定按项目真实 UUID 保存；URL 中的项目编码仅用于路由展示。
                 setProjectUuid(realUuid)
-                setProjectAliases(ck[1] !== realUuid ? [ck[1]] : [])
-                loadList(realUuid, undefined, [ck[1]])
+                loadList(realUuid)
                 return fetch(`/project/api/project/team/${tuid}/project/${realUuid}/stamps/data?t=project`, {
                   method: 'POST', credentials: 'include',
                   headers: { 'Content-Type': 'application/json' },
@@ -209,7 +207,7 @@ const App: React.FC = () => {
     if (!puid) {
       try { const m = document.referrer.match(/[?&]projectUUID=([^&]+)/); if (m) puid = m[1] } catch {}
     }
-    if (puid) { setProjectUuid(puid); setProjectAliases([puid]); loadList(puid) }
+    if (puid) { setProjectUuid(puid); loadList(puid) }
     else { setMsg('无法识别当前项目'); setLoading(false) }
     // 加载阶段配置 + IPD 流程图布局
     api.getPluginConfig().then((c: any) => {
@@ -228,17 +226,17 @@ const App: React.FC = () => {
     checkPermission('dcp_create_review').then(p => setHasCreatePerm(p))
   }, [])
 
-  async function loadList(puid: string, rvType?: string, aliases: string[] = projectAliases) {
+  async function loadList(puid: string, rvType?: string) {
     setLoading(true)
     setPage(1)
     const t = rvType || reviewType
     try {
       // 加载全部评审（用于 IPD 流程图），客户端按 tab 过滤列表
-      const data = await api.listReviewsByProject(puid, undefined, aliases)
+      const data = await api.listReviewsByProject(puid, undefined)
       const all = data.reviews || []
       setAllReviews(all)
       setReviews(all.filter((r: any) => (r.review_type || 'dcp') === t))
-      setPassedPhases(data.passedPhases || [])
+      setPassedPhasesByType(data.passedPhasesByType || { dcp: [], tr: [] })
     }
     catch (e: any) { setMsg(`加载评审列表失败: ${e.message}`) }
     finally { setLoading(false) }
@@ -260,7 +258,7 @@ const App: React.FC = () => {
   async function handleCreate(form: any) {
     setMsg('')
     try {
-      const res = await api.createReview({ ...form, project_uuid: projectUuid, project_identifier: projectKey, project_aliases: projectAliases })
+      const res = await api.createReview({ ...form, project_uuid: projectUuid })
       let memberSyncError = ''
       if (Array.isArray(res.auto_reviewer_uuids) && res.auto_reviewer_uuids.length > 0) {
         try { await api.ensureProjectMembers(projectUuid, res.auto_reviewer_uuids) }
@@ -284,7 +282,7 @@ const App: React.FC = () => {
 
   async function handleStart(rid: string) {
     setMsg('')
-    try { await api.startReview(rid, { operator_uuid: currentUser.uuid, project_aliases: projectAliases }); await loadDetail(rid) } catch (e: any) { setMsg(e.message) }
+    try { await api.startReview(rid); await loadDetail(rid) } catch (e: any) { setMsg(e.message) }
   }
 
   async function handleRecreate(rid: string) {
@@ -340,7 +338,7 @@ const App: React.FC = () => {
       </div>
       {msg && <div style={{ marginBottom: 12, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#cf1322' }}>{msg}</div>}
       {view === 'list' && reviewType === 'dcp' && phases.length > 0 && <IPDFlowChart layout={ipdFlowLayout} phases={phases} reviews={allReviews} onPhaseClick={loadDetail} />}
-      {view === 'create' && <CreateReviewForm projectUuid={projectUuid} projectKey={projectKey} projectName={projectName} pkases={phases.filter((p: any) => (p.review_type || 'dcp') === reviewType)} passedPhases={passedPhases} currentUser={currentUser} reviewType={reviewType} onCreate={handleCreate} onCancel={() => setView('list')} />}
+      {view === 'create' && <CreateReviewForm projectUuid={projectUuid} projectKey={projectKey} projectName={projectName} pkases={phases.filter((p: any) => (p.review_type || 'dcp') === reviewType)} passedPhases={passedPhasesByType[reviewType] || []} currentUser={currentUser} reviewType={reviewType} onCreate={handleCreate} onCancel={() => setView('list')} />}
       {reviews.length === 0 && view === 'list' ? (
         <div style={{ padding: 40, textAlign: 'center', color: '#999', background: '#fafafa', borderRadius: 8 }}>
           <div style={{ fontSize: 14, marginBottom: 8 }}>该项目暂无 {reviewType === 'tr' ? 'TR' : 'DCP'} 评审单</div>
@@ -1461,7 +1459,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
         ))}
       </div>
       {/* 内容区 */}
-      {activeTab === 'materials' && <div style={S.tabPanel}><MaterialsPanel data={data} editable={isEditable} isRemediation={isRemediation} onRefresh={onRefresh} currentUser={currentUser} /></div>}
+      {activeTab === 'materials' && <div style={S.tabPanel}><MaterialsPanel data={data} editable={data.can_edit_evidence === true} isRemediation={isRemediation} onRefresh={onRefresh} currentUser={currentUser} /></div>}
       {activeTab === 'reviewers' && <div style={S.tabPanel}><ReviewersPanel data={data} projectUuid={projectUuid} projectName={projectName || projectKey} editable={isEditable} isReviewing={isReviewing} onRefresh={onRefresh} currentUser={currentUser} /></div>}
       {activeTab === 'checklist' && (
         <div style={S.tabPanel}>

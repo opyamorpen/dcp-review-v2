@@ -51,9 +51,9 @@ def build_content_p4(pdf: ManualPDF):
     )
     pdf.bullet('Created after resolution publication to track corrective actions.')
     pdf.bullet('Status changes are monitored via ONES event hooks.')
-    pdf.bullet('When all remediation items reach "done" status, the review can transition to "completed".')
-    pdf.bullet('Remediation items are locked: they cannot be deleted while locked and their status changes are restricted.')
-    pdf.bullet('Lock state is tracked per issue with timestamp and locker identity.')
+    pdf.bullet('When all remediation items reach "done" status, the review can enter re-review.')
+    pdf.bullet('Remediation items are not locked and continue to follow normal ONES work item permissions.')
+    pdf.bullet('Re-review is blocked until every remediation item is authoritatively confirmed complete.')
 
     # ===== Chapter 10: Audit Trail =====
     pdf.section_title('10. Audit Trail')

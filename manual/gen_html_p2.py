@@ -161,9 +161,8 @@ sections.append(ul([
     'Create remediation work items after resolution publication.',
     'Items are ONES issues with link_type = remediation.',
     'Status changes monitored via event hooks.',
-    'When all remediation items done: publisher confirms completion -> Completed state.',
-    'Or trigger re-review -> re_reviewing state with new round.',
-    'Remediation items are locked (cannot delete while locked).',
+    'When all remediation items are done, the publisher confirms completion and starts re-review.',
+    'Remediation items remain editable under normal ONES permissions; re-review waits until all are complete.',
 ]))
 
 sections.append(h3('5.8 Round Comparison / 多轮对比'))

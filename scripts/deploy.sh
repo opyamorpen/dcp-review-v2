@@ -182,7 +182,7 @@ else
   echo "  OPK 目标版本: $OPK_VERSION"
 
   if [[ "$INSTALLED_VERSION" != "$OPK_VERSION" ]]; then
-    echo "错误: 版本不匹配 — 安装记录为 $INSTALLED_VERSION，目标为 $OPK_VERSION"
+    echo "错误: 版本不匹配 — 安装记录为 ${INSTALLED_VERSION}，目标为 ${OPK_VERSION}"
     echo "  升级可能未真正生效，请检查 ONES 平台插件管理页面"
     exit 1
   fi

@@ -169,11 +169,9 @@ export async function ensureProjectMembers(projectUuid: string, userUuids: strin
 // ---- 评审单 ----
 export const createReview = (data: any) => callApi('/dcp/review', { method: 'POST', body: JSON.stringify(data) })
 export const getReviewDetail = (uuid: string) => callApi(`/dcp/review/${uuid}`)
-export const listReviewsByProject = (puuid: string, reviewType?: string, projectAliases: string[] = []) => {
+export const listReviewsByProject = (puuid: string, reviewType?: string) => {
   const params = new URLSearchParams()
   if (reviewType) params.set('review_type', reviewType)
-  const aliases = [...new Set(projectAliases.filter(alias => alias && alias !== puuid))]
-  if (aliases.length > 0) params.set('project_aliases', aliases.join(','))
   const query = params.toString()
   return callApi(`/dcp/reviews/by-project/${puuid}${query ? `?${query}` : ''}`)
 }

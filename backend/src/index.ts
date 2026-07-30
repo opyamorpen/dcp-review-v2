@@ -11,10 +11,6 @@ import { PluginResponse } from '@ones-op/node-types'
 import { OPFetch, getOpenApiToken } from '@ones-op/fetch'
 import { Notify, NotifyWay } from '@ones-op/node-ability'
 
-// TaskEventHandler 函数必须在入口文件 re-export，否则 npx op packup 不会打包进 dist/index.js
-// 导致 ONES 运行时找不到 handler 函数，所有工作项变更返回 500
-export { taskPreAction, taskActionDone } from './task-event-handler'
-
 // ============================================================
 // 实体引用
 // ============================================================
@@ -125,6 +121,27 @@ const ACTIVE_PHASE_STATES = new Set([
   'resolution_published', 'remediation_pending', 're_reviewing',
 ])
 
+type CanonicalProjectIdentity = {
+  canonicalUuid: string
+  identifier: string
+  key: string
+  lookupIds: Set<string>
+}
+
+type PhaseDependencySnapshot = {
+  canonicalProjectUuid: string
+  projectIdentifier: string
+  dependencies: string[]
+  capturedAt: number
+}
+
+type EvidenceEditContext = {
+  editable: boolean
+  frozen: boolean
+  targetRound: number
+  state: string
+}
+
 function normalizeReviewType(value: any): string {
   return value === 'tr' ? 'tr' : 'dcp'
 }
@@ -148,17 +165,38 @@ async function findPhaseReviewConflict(
     normalizeReviewType(v.review_type) === normalizeReviewType(reviewType) &&
     v.review_uuid !== excludeReviewUuid,
   )
+  let activeConflict: { kind: 'active'; review: any; resolution: any | null } | null = null
   for (const candidate of candidates) {
     const state = getEffectiveState(candidate)
     const resolutions = await qAll(resolution, (v: any) => v.review_uuid === candidate.review_uuid)
     const latest = getLatestResolution(resolutions, Number(candidate.round_no || 1))
-    if (ACTIVE_PHASE_STATES.has(state)) return { kind: 'active', review: candidate, resolution: latest }
+    if (ACTIVE_PHASE_STATES.has(state) && !activeConflict) {
+      activeConflict = { kind: 'active', review: candidate, resolution: latest }
+    }
     if ((state === 'completed' || state === 'archived') &&
       (latest?.final_conclusion === 'pass' || latest?.final_conclusion === 'conditional_pass')) {
       return { kind: 'passed', review: candidate, resolution: latest }
     }
   }
-  return null
+  return activeConflict
+}
+
+function phaseConflictResponse(conflict: { kind: 'active' | 'passed'; review: any }, phaseName: string, reviewType: string): PluginResponse {
+  const conflictState = getEffectiveState(conflict.review)
+  const code = conflict.kind === 'passed' ? 'REVIEW_PHASE_ALREADY_PASSED' : 'REVIEW_PHASE_ALREADY_ACTIVE'
+  const message = conflict.kind === 'passed'
+    ? `${reviewType === 'tr' ? 'TR' : 'DCP'}阶段「${phaseName}」已通过评审，不可重复发起`
+    : `${reviewType === 'tr' ? 'TR' : 'DCP'}阶段「${phaseName}」已有评审单处于${conflictState}，请继续原评审单`
+  return {
+    body: {
+      code,
+      error: message,
+      conflict_review_uuid: conflict.review.review_uuid || '',
+      conflict_review_number: conflict.review.review_number || '',
+      conflict_review_status: conflictState,
+    },
+    statusCode: 409,
+  }
 }
 
 async function claimPhaseGuard(
@@ -203,6 +241,30 @@ async function releasePhaseGuard(rv: any): Promise<void> {
       await phaseGuard.set(key, { ...current, guard_state: 'released', released_at: Date.now() })
     }
   } catch { /* guard release must not block the business operation */ }
+}
+
+function getEvidenceEditContext(rv: any): EvidenceEditContext {
+  const state = getEffectiveState(rv)
+  const currentRound = Number(rv?.round_no || 1)
+  const editable = state === 'draft' || state === 'ready' || state === 'remediation_pending'
+  return {
+    editable,
+    frozen: !editable,
+    targetRound: state === 'remediation_pending' ? currentRound + 1 : currentRound,
+    state,
+  }
+}
+
+function evidenceEditDenied(context: EvidenceEditContext): PluginResponse | null {
+  if (context.editable) return null
+  return {
+    body: {
+      code: 'REVIEW_EVIDENCE_FROZEN',
+      error: '当前评审状态下投票依据已冻结，不可修改',
+      review_state: context.state,
+    },
+    statusCode: 403,
+  }
 }
 
 // ---- 通知 ---- 
@@ -723,13 +785,20 @@ async function findProjectByGraphQL(
   return projects.find((p: any) => p.uuid === realUUID || p.identifier === identifier) || null
 }
 
-async function findProjectByStamp(teamUUID: string, realUUID: string): Promise<any> {
+async function findProjectByStamp(
+  teamUUID: string,
+  realUUID: string,
+  requestHeaders: Record<string, string> = {},
+  platformApiHost = '',
+): Promise<any> {
+  const path = `/project/api/project/team/${teamUUID}/project/${realUUID}/stamps/data?t=project`
   const stampRes = await OPFetch(
-    `/project/api/project/team/${teamUUID}/project/${realUUID}/stamps/data?t=project`,
+    platformApiHost ? buildPlatformUrl(platformApiHost, path) : path,
     {
       method: 'POST',
+      root: !platformApiHost,
       teamUUID,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...requestHeaders, 'Content-Type': 'application/json' },
       data: { project: 0 },
     }
   ) as any
@@ -737,15 +806,21 @@ async function findProjectByStamp(teamUUID: string, realUUID: string): Promise<a
   return stampData?.project?.projects?.[0] || null
 }
 
-async function resolveProjectMeta(teamUUID: string, projectKey: string): Promise<Record<string, string>> {
+async function resolveProjectMeta(
+  teamUUID: string,
+  projectKey: string,
+  requestHeaders: Record<string, string> = {},
+  platformApiHost = '',
+): Promise<Record<string, string>> {
   let identifier = projectKey
   let realUUID = ''
 
   // Step 1: exchange API → real UUID + identifier（失败不致命）
   try {
+    const exchangePath = `/project/api/ones-project/team/${teamUUID}/projects/exchange/${projectKey}`
     const exchRes = await OPFetch(
-      `/project/api/ones-project/team/${teamUUID}/projects/exchange/${projectKey}`,
-      { teamUUID }
+      platformApiHost ? buildPlatformUrl(platformApiHost, exchangePath) : exchangePath,
+      { root: !platformApiHost, teamUUID, headers: requestHeaders }
     )
     const exchData = exchRes?.data || exchRes || {}
     identifier = exchData.identifier || projectKey
@@ -758,7 +833,9 @@ async function resolveProjectMeta(teamUUID: string, projectKey: string): Promise
   let project: any = null
   if (realUUID || identifier) {
     try {
-      project = await findProjectByGraphQL(teamUUID, realUUID, identifier)
+      project = await findProjectByGraphQL(
+        teamUUID, realUUID || projectKey, identifier, !platformApiHost, requestHeaders, platformApiHost,
+      )
     } catch (err: any) {
       Logger.info(`[DCP][project-meta] graphql failed, key=${projectKey}, realUUID=${realUUID}, err=${err?.message || err}`)
     }
@@ -767,7 +844,7 @@ async function resolveProjectMeta(teamUUID: string, projectKey: string): Promise
   // Step 3: stamps 兜底 → project name
   if (!project && realUUID) {
     try {
-      project = await findProjectByStamp(teamUUID, realUUID)
+      project = await findProjectByStamp(teamUUID, realUUID, requestHeaders, platformApiHost)
     } catch (err: any) {
       Logger.info(`[DCP][project-meta] stamp failed, key=${projectKey}, realUUID=${realUUID}, err=${err?.message || err}`)
     }
@@ -776,8 +853,58 @@ async function resolveProjectMeta(teamUUID: string, projectKey: string): Promise
   return {
     project_identifier: project?.identifier || identifier || projectKey,
     project_real_uuid: project?.uuid || realUUID || '',
+    project_key: project?.key || '',
     project_name: project?.name || identifier || projectKey,
   }
+}
+
+async function resolveCanonicalProjectIdentity(req: any, projectRef: string): Promise<CanonicalProjectIdentity> {
+  const teamUUID = getParam(req, 'team_uuid') || getParam(req, 'teamUUID') || await env.getTeamUUID()
+  if (!teamUUID || !projectRef) {
+    throw new Error('无法确定项目身份')
+  }
+  const runtime = await getAuthorizationRuntime(req)
+  const platformApiHost = getTrustedRequestOrigin(req) || runtime.platformApiHost
+  const meta = await resolveProjectMeta(
+    teamUUID, projectRef, getForwardedAuthenticationHeaders(req), platformApiHost,
+  )
+  const canonicalUuid = String(meta.project_real_uuid || '')
+  if (!canonicalUuid) {
+    throw new Error('无法从 ONES 获取项目真实 UUID，已拒绝执行阶段规则')
+  }
+  const identifier = String(meta.project_identifier || '')
+  const key = String(meta.project_key || '')
+  return {
+    canonicalUuid,
+    identifier,
+    key,
+    lookupIds: new Set([projectRef, canonicalUuid, identifier, key].filter(Boolean)),
+  }
+}
+
+async function getPhaseDependencies(phaseCode: string, reviewType: string): Promise<string[]> {
+  const rows = await qAll(phaseTpl, (v: any) =>
+    v.phase_code === phaseCode && normalizeReviewType(v.review_type) === normalizeReviewType(reviewType),
+  )
+  return [...new Set(jsonArr(rows[0]?.dependencies || '[]').map(String).filter(Boolean))]
+}
+
+async function getClosedPassingPhases(projectIds: Set<string>, reviewType: string): Promise<Set<string>> {
+  const candidates = await qAll(review, (v: any) =>
+    projectIds.has(String(v.project_uuid || '')) &&
+    normalizeReviewType(v.review_type) === normalizeReviewType(reviewType),
+  )
+  const passed = new Set<string>()
+  for (const candidate of candidates) {
+    const state = getEffectiveState(candidate)
+    if (state !== 'completed' && state !== 'archived') continue
+    const resolutions = await qAll(resolution, (v: any) => v.review_uuid === candidate.review_uuid)
+    const latest = getLatestResolution(resolutions, Number(candidate.round_no || 1))
+    if (latest?.final_conclusion === 'pass' || latest?.final_conclusion === 'conditional_pass') {
+      passed.add(String(candidate.phase_code || ''))
+    }
+  }
+  return passed
 }
 
 export async function Enable() {
@@ -1012,6 +1139,35 @@ async function buildFrozenRule(reviewType: string): Promise<any> {
       mustVoteOrVetoNames: roleTemplates.filter((r: any) => r.must_vote || r.has_veto).map((r: any) => r.role_name),
       vetoRoleNames: roleTemplates.filter((r: any) => r.has_veto).map((r: any) => r.role_name),
     },
+  }
+}
+
+function withPhaseDependencySnapshot(
+  rule: any, projectIdentity: CanonicalProjectIdentity, dependencies: string[], capturedAt: number,
+): any {
+  return {
+    ...rule,
+    _phase: {
+      canonicalProjectUuid: projectIdentity.canonicalUuid,
+      projectIdentifier: projectIdentity.identifier,
+      dependencies: [...new Set(dependencies.map(String).filter(Boolean))],
+      capturedAt,
+    } as PhaseDependencySnapshot,
+  }
+}
+
+function getPhaseDependencySnapshot(rv: any): PhaseDependencySnapshot | null {
+  try {
+    const snapshot = JSON.parse(String(rv?.resolution_rule_json || ''))._phase
+    if (!snapshot || !Array.isArray(snapshot.dependencies) || !Number(snapshot.capturedAt || 0)) return null
+    return {
+      canonicalProjectUuid: String(snapshot.canonicalProjectUuid || ''),
+      projectIdentifier: String(snapshot.projectIdentifier || ''),
+      dependencies: [...new Set<string>(snapshot.dependencies.map((value: any) => String(value)).filter(Boolean))],
+      capturedAt: Number(snapshot.capturedAt),
+    }
+  } catch {
+    return null
   }
 }
 
@@ -1490,32 +1646,32 @@ export async function createReview(req: any): Promise<PluginResponse> {
   const rvUuid = makeUuid()
   const now = Date.now()
   const reviewType = normalizeReviewType(review_type)
-  const projectAliases = Array.isArray(b.project_aliases) ? b.project_aliases.filter(Boolean).map(String) : []
-  const projectLookupIds = new Set([project_uuid, ...projectAliases])
+  let projectIdentity: CanonicalProjectIdentity
+  try {
+    projectIdentity = await resolveCanonicalProjectIdentity(req, String(project_uuid))
+  } catch (e: any) {
+    return { body: { code: 'PROJECT_IDENTITY_UNAVAILABLE', error: e?.message || '无法确定项目身份' }, statusCode: 503 }
+  }
+  const phaseDependencies = await getPhaseDependencies(phase_code, reviewType)
 
   // 同项目、同阶段、同类型只允许一个活动或已通过评审；复审必须复用原评审单。
-  const phaseConflict = await findPhaseReviewConflict(projectLookupIds, phase_code, reviewType)
+  const phaseConflict = await findPhaseReviewConflict(projectIdentity.lookupIds, phase_code, reviewType)
   if (phaseConflict) {
     const phaseName = (await qAll(phaseTpl, (v: any) =>
       v.phase_code === phase_code && normalizeReviewType(v.review_type) === normalizeReviewType(reviewType)))[0]?.phase_name || phase_code
-    const conflictState = getEffectiveState(phaseConflict.review)
-    const code = phaseConflict.kind === 'passed' ? 'REVIEW_PHASE_ALREADY_PASSED' : 'REVIEW_PHASE_ALREADY_ACTIVE'
-    const message = phaseConflict.kind === 'passed'
-      ? `${reviewType === 'tr' ? 'TR' : 'DCP'}阶段「${phaseName}」已通过评审，不可重复发起`
-      : `${reviewType === 'tr' ? 'TR' : 'DCP'}阶段「${phaseName}」已有评审单处于${conflictState}，请继续原评审单`
-    return { body: { code, error: message, conflict_review_uuid: phaseConflict.review.review_uuid }, statusCode: 409 }
+    return phaseConflictResponse(phaseConflict, phaseName, reviewType)
   }
 
   // 固化决议规则：创建时把当前规则 + 依赖角色模板的展开结果一次性写入评审单
   let frozenRuleJson = ''
   try {
     const frozenRule = await buildFrozenRule(reviewType)
-    frozenRuleJson = JSON.stringify(frozenRule)
+    frozenRuleJson = JSON.stringify(withPhaseDependencySnapshot(frozenRule, projectIdentity, phaseDependencies, now))
   } catch (e: any) {
     return { body: { error: `${reviewType.toUpperCase()} 决议规则读取失败: ${e.message || String(e)}` }, statusCode: 400 }
   }
   // 生成唯一编号: {项目标识}{YYYYMMDD}{两位序号}，序号计数器存 base_config
-  const projectIdentifier = b.project_identifier || ''
+  const projectIdentifier = projectIdentity.identifier || projectIdentity.key || ''
   let reviewNumber = ''
   try {
     const d = new Date()
@@ -1546,7 +1702,7 @@ export async function createReview(req: any): Promise<PluginResponse> {
     item_text: c.item_text, sort_order: c.sort_order ?? 0,
   })))
 
-  const claimedGuard = await claimPhaseGuard(project_uuid, phase_code, reviewType, rvUuid)
+  const claimedGuard = await claimPhaseGuard(projectIdentity.canonicalUuid, phase_code, reviewType, rvUuid)
   if (!claimedGuard.ok) {
     return {
       body: { code: 'REVIEW_PHASE_ALREADY_ACTIVE', error: '该项目阶段已有评审单，请刷新后继续原评审单', conflict_review_uuid: claimedGuard.existing?.review_uuid || '' },
@@ -1555,7 +1711,9 @@ export async function createReview(req: any): Promise<PluginResponse> {
   }
 
   await review.set(rvUuid, cleanForSet({
-    review_uuid: rvUuid, project_uuid, phase_code,
+    review_uuid: rvUuid,
+    project_uuid: projectIdentity.canonicalUuid,
+    phase_code,
     review_title: review_title || 'DCP评审', meeting_time: meeting_time || 0,
     status: 'draft',
     review_state: 'draft',
@@ -1581,6 +1739,7 @@ export async function createReview(req: any): Promise<PluginResponse> {
     await matItem.set(`${rvUuid}_mat_${m._key}`, {
       review_uuid: rvUuid, template_id: m._key, submit_status: 'pending',
       notes: '', updated_by: '', updated_at: 0,
+      round_no: 1,
       material_name: m.material_name || '', required: m.required ? 1 : 0,
       responsible_role: m.responsible_role || '', sort_order: m.sort_order ?? 0,
     })
@@ -1591,6 +1750,7 @@ export async function createReview(req: any): Promise<PluginResponse> {
     await indData.set(`${rvUuid}_ind_${i._key}`, {
       review_uuid: rvUuid, template_id: i._key, current_value: 0,
       notes: '', risk_color: 'green', updated_by: '', updated_at: 0,
+      round_no: 1,
       indicator_name: i.indicator_name || '', threshold_type: i.threshold_type || '',
       yellow_threshold: Number(i.yellow_threshold ?? 0), red_threshold: Number(i.red_threshold ?? 0),
       sort_order: i.sort_order ?? 0,
@@ -1604,7 +1764,7 @@ export async function createReview(req: any): Promise<PluginResponse> {
   let autoAppliedCount = 0
   try {
     const bindings = await qAll(projectBinding, (v: any) =>
-      v.project_uuid === project_uuid && (v.review_type || 'dcp') === reviewType)
+      v.project_uuid === projectIdentity.canonicalUuid && (v.review_type || 'dcp') === reviewType)
     if (bindings.length > 0) {
       const binding = bindings[0]
       const profile = await reviewerProfile.get(binding.profile_id)
@@ -1720,27 +1880,27 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
   const now = Date.now()
   // 重新发起使用当前最新配置固化规则（而非复制源单旧规则）
   const reviewType = normalizeReviewType(srcRv.review_type)
-  const newProjectUuid = b.project_uuid || srcRv.project_uuid
-  const phaseConflict = await findPhaseReviewConflict(new Set([String(newProjectUuid)]), srcRv.phase_code, reviewType)
+  const projectRef = String(srcRv.project_uuid || b.project_uuid || '')
+  let projectIdentity: CanonicalProjectIdentity
+  try {
+    projectIdentity = await resolveCanonicalProjectIdentity(req, projectRef)
+  } catch (e: any) {
+    return { body: { code: 'PROJECT_IDENTITY_UNAVAILABLE', error: e?.message || '无法确定项目身份' }, statusCode: 503 }
+  }
+  const phaseDependencies = await getPhaseDependencies(srcRv.phase_code, reviewType)
+  const phaseConflict = await findPhaseReviewConflict(projectIdentity.lookupIds, srcRv.phase_code, reviewType)
   if (phaseConflict) {
-    return {
-      body: {
-        code: phaseConflict.kind === 'passed' ? 'REVIEW_PHASE_ALREADY_PASSED' : 'REVIEW_PHASE_ALREADY_ACTIVE',
-        error: phaseConflict.kind === 'passed' ? '该阶段已经通过，不能重复发起' : '该项目阶段已有活动评审单，请继续原评审单',
-        conflict_review_uuid: phaseConflict.review.review_uuid,
-      },
-      statusCode: 409,
-    }
+    return phaseConflictResponse(phaseConflict, srcRv.phase_code, reviewType)
   }
   let frozenRuleJson = ''
   try {
     const frozenRule = await buildFrozenRule(reviewType)
-    frozenRuleJson = JSON.stringify(frozenRule)
+    frozenRuleJson = JSON.stringify(withPhaseDependencySnapshot(frozenRule, projectIdentity, phaseDependencies, now))
   } catch (e: any) {
     return { body: { error: `${reviewType.toUpperCase()} 决议规则读取失败: ${e.message || String(e)}` }, statusCode: 400 }
   }
   // 生成编号
-  const projectIdentifier = srcRv.project_identifier || b.project_identifier || ''
+  const projectIdentifier = projectIdentity.identifier || projectIdentity.key || ''
   let reviewNumber = ''
   try {
     const d = new Date()
@@ -1783,14 +1943,14 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
     item_text: c.item_text, sort_order: c.sort_order ?? 0,
   })))
 
-  const claimedGuard = await claimPhaseGuard(String(newProjectUuid), srcRv.phase_code, reviewType, newRid)
+  const claimedGuard = await claimPhaseGuard(projectIdentity.canonicalUuid, srcRv.phase_code, reviewType, newRid)
   if (!claimedGuard.ok) {
     return { body: { code: 'REVIEW_PHASE_ALREADY_ACTIVE', error: '该项目阶段已有评审单，请刷新后继续原评审单', conflict_review_uuid: claimedGuard.existing?.review_uuid || '' }, statusCode: 409 }
   }
 
   await review.set(newRid, cleanForSet({
     review_uuid: newRid,
-    project_uuid: newProjectUuid,
+    project_uuid: projectIdentity.canonicalUuid,
     phase_code: srcRv.phase_code,
     review_title: srcRv.review_title || 'DCP评审',
     meeting_time: 0,
@@ -1824,12 +1984,13 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
     await matItem.set(`${newRid}_mat_${m._key}`, {
       review_uuid: newRid, template_id: m._key,
       submit_status: src?.file_data ? 'submitted' : 'pending',
-      notes: '', updated_by: '', updated_at: 0,
+      notes: '', updated_by: '', updated_at: 0, round_no: 1,
       material_name: m.material_name || '', required: m.required ? 1 : 0,
       responsible_role: m.responsible_role || '', sort_order: m.sort_order ?? 0,
       // 保留源单已上传的文件
       file_name: src?.file_name || '', file_data: src?.file_data || '',
       file_size: src?.file_size || 0, uploaded_at: src?.uploaded_at || 0,
+      attachments_json: '[]',
     })
   }
 
@@ -1852,7 +2013,7 @@ export async function recreateReview(req: any): Promise<PluginResponse> {
     await indData.set(`${newRid}_ind_${i._key}`, {
       review_uuid: newRid, template_id: i._key, current_value: currentValue,
       notes: src?.notes || '', risk_color: color,
-      updated_by: '', updated_at: 0,
+      updated_by: '', updated_at: 0, round_no: 1,
       indicator_name: i.indicator_name || '', threshold_type: i.threshold_type || '',
       yellow_threshold: Number(i.yellow_threshold ?? 0), red_threshold: Number(i.red_threshold ?? 0),
       sort_order: i.sort_order ?? 0,
@@ -1935,6 +2096,7 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
     Logger.info(`[DCP] getReviewDetail building response`)
     const _rvEffState = getEffectiveState(rv)
     const _currentRoundNo = (rv as any).round_no || 1
+    const evidenceContext = getEvidenceEditContext(rv)
     // 整改关联工作项
     const remediationIssues = issues.filter((v: any) => v.link_type === 'remediation')
     const remediationSummary = summarizeRemediation(remediationIssues)
@@ -1958,6 +2120,9 @@ export async function getReviewDetail(req: any): Promise<PluginResponse> {
       checklist: jsonArr((rv as any).checklist_json || '[]'),
       state_history: jsonArr((rv as any).state_history_json || '[]'),
       available_transitions: _rvEffState === 'remediation_pending' ? ['re_reviewing'] : [],
+      can_edit_evidence: evidenceContext.editable,
+      evidence_frozen: evidenceContext.frozen,
+      evidence_target_round: evidenceContext.targetRound,
     }}
   } catch (e: any) {
     // ONES SDK 异常可能不是标准 Error，把完整对象序列化用于诊断
@@ -1983,9 +2148,17 @@ export async function listReviewsByProject(req: any): Promise<PluginResponse> {
   const puid = getParam(req, 'project_uuid')
   const rvType = getParam(req, 'review_type') || ''
   if (!puid) return { body: { error: '缺少 project_uuid' }, statusCode: 400 }
-  const projectAliases = getParam(req, 'project_aliases').split(',').map(v => v.trim()).filter(Boolean)
-  const projectLookupIds = new Set([puid, ...projectAliases])
-  let rvs = await qAll(review, (v: any) => projectLookupIds.has(v.project_uuid) && (!rvType || (v.review_type || 'dcp') === rvType))
+  let projectIdentity: CanonicalProjectIdentity
+  try {
+    projectIdentity = await resolveCanonicalProjectIdentity(req, puid)
+  } catch (e: any) {
+    return { body: { code: 'PROJECT_IDENTITY_UNAVAILABLE', error: e?.message || '无法确定项目身份' }, statusCode: 503 }
+  }
+  const projectLookupIds = projectIdentity.lookupIds
+  const rvs = await qAll(review, (v: any) =>
+    projectLookupIds.has(String(v.project_uuid || '')) &&
+    (!rvType || normalizeReviewType(v.review_type) === normalizeReviewType(rvType)),
+  )
   // 补充阶段名称映射
   const allPhases = await qAll(phaseTpl)
   const phMap = new Map(allPhases.map((p: any) => [p.phase_code, p.phase_name]))
@@ -2045,17 +2218,16 @@ export async function listReviewsByProject(req: any): Promise<PluginResponse> {
     }
   }))
   enriched.sort((a: any, b: any) => (b.created_at || 0) - (a.created_at || 0))
-  // 返回已通过阶段列表（决议为 pass/conditional_pass，供前端依赖检查）
-  const allProjReviews = await qAll(review, (v: any) => projectLookupIds.has(v.project_uuid))
-  const passedPhases: string[] = []
-  for (const r of allProjReviews) {
-    const res = await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)
-    const fc = getLatestResolution(res, (r as any).round_no || 1)?.final_conclusion || ''
-    if (fc === 'pass' || fc === 'conditional_pass') {
-      passedPhases.push(r.phase_code)
-    }
-  }
-  return { body: { reviews: enriched, passedPhases: [...new Set(passedPhases)] } }
+  // 前端提示与后端发起校验共用“已完成闭环且本轮通过”的口径，并按评审类型隔离。
+  const [passedDcp, passedTr] = await Promise.all([
+    getClosedPassingPhases(projectLookupIds, 'dcp'),
+    getClosedPassingPhases(projectLookupIds, 'tr'),
+  ])
+  const passedPhasesByType = { dcp: [...passedDcp], tr: [...passedTr] }
+  const passedPhases = rvType
+    ? passedPhasesByType[normalizeReviewType(rvType) as 'dcp' | 'tr']
+    : [...new Set([...passedPhasesByType.dcp, ...passedPhasesByType.tr])]
+  return { body: { reviews: enriched, passedPhases, passedPhasesByType } }
 }
 
 // ============================================================
@@ -2476,9 +2648,8 @@ export async function listMyReviews(req: any): Promise<PluginResponse> {
 export async function startReview(req: any): Promise<PluginResponse> {
   try {
   const rid = getParam(req, 'review_uuid')
-  const b = (req.body || {}) as any
   if (!rid) return { body: { error: '缺少 review_uuid' }, statusCode: 400 }
-  const rv = await review.get(rid)
+  let rv = await review.get(rid) as any
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
   // 方案B：仅创建者可发起评审
   const _startOp = getOperator(req)
@@ -2488,26 +2659,76 @@ export async function startReview(req: any): Promise<PluginResponse> {
   // canceled 兼容旧 status=draft，可通过本专用入口重新发起；不允许通过通用 transition 绕过这里的全部前置校验。
   if (rv.status !== 'draft') return { body: { error: '当前状态不可发起评审' }, statusCode: 400 }
 
-  // 校验 0：前置依赖检查——前置阶段的决议必须为"通过"或"有条件通过"
-  const reviewType = (rv as any).review_type || 'dcp'
-  const phaseTplRow = await qAll(phaseTpl, (v: any) => v.phase_code === (rv as any).phase_code && (v.review_type || 'dcp') === reviewType)
-  const deps = jsonArr(phaseTplRow[0]?.dependencies || '[]')
-  if (deps.length) {
-    const projectAliases = Array.isArray(b.project_aliases) ? b.project_aliases.filter(Boolean).map(String) : []
-    const projectLookupIds = new Set([(rv as any).project_uuid, ...projectAliases])
-    const projReviews = await qAll(review, (v: any) => projectLookupIds.has(v.project_uuid))
-    const passedPhases = new Set<string>()
-    for (const r of projReviews) {
-      if (!deps.includes(r.phase_code)) continue
-      const res = await qAll(resolution, (v: any) => v.review_uuid === r.review_uuid)
-      const fc = getLatestResolution(res, (r as any).round_no || 1)?.final_conclusion || ''
-      if (fc === 'pass' || fc === 'conditional_pass') {
-        passedPhases.add(r.phase_code)
-      }
+  const reviewType = normalizeReviewType(rv.review_type)
+  let projectIdentity: CanonicalProjectIdentity
+  try {
+    projectIdentity = await resolveCanonicalProjectIdentity(req, String(rv.project_uuid || ''))
+  } catch (e: any) {
+    return { body: { code: 'PROJECT_IDENTITY_UNAVAILABLE', error: e?.message || '无法确定项目身份' }, statusCode: 503 }
+  }
+
+  // 新评审单在创建时把阶段依赖写入决议规则快照；旧草稿在首次发起时补齐。
+  let phaseSnapshot = getPhaseDependencySnapshot(rv)
+  let frozenRuleJson = String(rv.resolution_rule_json || '')
+  if (!phaseSnapshot) {
+    let frozenRule: any
+    try {
+      frozenRule = await getResolutionRuleForReview(rv)
+    } catch (e: any) {
+      return { body: { code: 'REVIEW_CONFIG_SNAPSHOT_MISSING', error: e?.message || '评审配置快照缺失' }, statusCode: 409 }
     }
+    const dependencies = await getPhaseDependencies(rv.phase_code, reviewType)
+    phaseSnapshot = {
+      canonicalProjectUuid: projectIdentity.canonicalUuid,
+      projectIdentifier: projectIdentity.identifier,
+      dependencies,
+      capturedAt: Date.now(),
+    }
+    frozenRuleJson = JSON.stringify(withPhaseDependencySnapshot(
+      frozenRule, projectIdentity, dependencies, phaseSnapshot.capturedAt,
+    ))
+  }
+  const deps = phaseSnapshot.dependencies
+  const identityOrSnapshotChanged =
+    rv.project_uuid !== projectIdentity.canonicalUuid ||
+    frozenRuleJson !== String(rv.resolution_rule_json || '')
+  if (identityOrSnapshotChanged) {
+    rv = cleanForSet({
+      ...rv,
+      project_uuid: projectIdentity.canonicalUuid,
+      resolution_rule_json: frozenRuleJson,
+    })
+    await review.set(rid, rv)
+  }
+
+  // 历史重复草稿也必须在发起时拦截，不能依赖创建时校验。
+  const phaseRows = await qAll(phaseTpl, (v: any) =>
+    v.phase_code === rv.phase_code && normalizeReviewType(v.review_type) === reviewType,
+  )
+  const phaseName = phaseRows[0]?.phase_name || rv.phase_code
+  const startConflict = await findPhaseReviewConflict(projectIdentity.lookupIds, rv.phase_code, reviewType, rid)
+  if (startConflict) return phaseConflictResponse(startConflict, phaseName, reviewType)
+
+  const claimedGuard = await claimPhaseGuard(projectIdentity.canonicalUuid, rv.phase_code, reviewType, rid)
+  if (!claimedGuard.ok) {
+    const guardConflict = await findPhaseReviewConflict(projectIdentity.lookupIds, rv.phase_code, reviewType, rid)
+    if (guardConflict) return phaseConflictResponse(guardConflict, phaseName, reviewType)
+    return { body: { code: 'REVIEW_PHASE_ALREADY_ACTIVE', error: '该项目阶段已被其他评审单占用，请刷新后重试' }, statusCode: 409 }
+  }
+
+  // 校验 0：前置阶段必须在同一规范项目、同一评审类型下完成闭环且本轮通过。
+  if (deps.length) {
+    const passedPhases = await getClosedPassingPhases(projectIdentity.lookupIds, reviewType)
     const unmet = deps.filter((d: string) => !passedPhases.has(d))
     if (unmet.length) {
-      return { body: { error: `前置阶段未通过决议，无法发起评审。需先通过（决议为"通过"或"有条件通过"）: ${unmet.join(', ')}` }, statusCode: 400 }
+      return {
+        body: {
+          code: 'PHASE_PREREQUISITES_NOT_SATISFIED',
+          error: `前置阶段尚未完成通过闭环，无法发起评审: ${unmet.join(', ')}`,
+          unmet_dependencies: unmet,
+        },
+        statusCode: 409,
+      }
     }
   }
 
@@ -2587,7 +2808,6 @@ export async function startReview(req: any): Promise<PluginResponse> {
     return { body: { error: `以下关键指标已超出红线阈值，请修正后再发起评审：${names.join('、')}` }, statusCode: 400 }
   }
 
-  const now = Date.now()
   // 初始化 checklist：从固化模板复制到 review.checklist_json（兜底实时模板）
   const phaseItems = await getChecklistTemplatesForReview(rv)
   let checklistJson = (rv as any).checklist_json || '[]'
@@ -2603,6 +2823,14 @@ export async function startReview(req: any): Promise<PluginResponse> {
     }))
     checklistJson = JSON.stringify(initList)
   }
+  // 提交状态前再次检查冲突和 guard，缩小并发创建/发起的竞争窗口。
+  const finalConflict = await findPhaseReviewConflict(projectIdentity.lookupIds, rv.phase_code, reviewType, rid)
+  if (finalConflict) return phaseConflictResponse(finalConflict, phaseName, reviewType)
+  const confirmedGuard = await phaseGuard.get(phaseGuardKey(projectIdentity.canonicalUuid, rv.phase_code, reviewType)) as any
+  if (confirmedGuard?.guard_state !== 'active' || confirmedGuard?.review_uuid !== rid) {
+    return { body: { code: 'REVIEW_PHASE_GUARD_LOST', error: '阶段占用状态已变化，请刷新后重试' }, statusCode: 409 }
+  }
+
   const opUuid = getOperator(req)
   const stateFields = buildStateTransition(rv, 'reviewing', opUuid, '发起评审', { checklist_json: checklistJson })
   await review.set(rid, cleanForSet({ ...rv, ...stateFields }))
@@ -2805,16 +3033,9 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
   }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
-  // 材料权限：草稿/就绪可覆盖式上传；整改期间可追加（旧文件推入 attachments_json）
-  const effState = getEffectiveState(rv)
-  const currentRoundNo = (rv as any).round_no || 1
-  const canUpload =
-    effState === 'draft' ||
-    effState === 'ready' ||
-    effState === 'remediation_pending'
-  if (!canUpload) {
-    return { body: { error: '评审已发起，材料不可修改' }, statusCode: 403 }
-  }
+  const evidenceContext = getEvidenceEditContext(rv)
+  const denied = evidenceEditDenied(evidenceContext)
+  if (denied) return denied
   const key = `${rid}_mat_${template_id}`
   const ex = (await matItem.get(key)) as any
   if (!ex) return { body: { error: '材料项不存在' }, statusCode: 404 }
@@ -2822,7 +3043,7 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
 
   // 整改期间追加：旧当前文件推入 attachments_json，新文件成为当前版
   let attachments = jsonArr((ex as any).attachments_json || '[]')
-  if (effState === 'remediation_pending' && ex.file_data) {
+  if (evidenceContext.state === 'remediation_pending' && ex.file_data) {
     attachments.push({
       file_name: ex.file_name || '',
       file_data: ex.file_data || '',
@@ -2832,7 +3053,7 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
       uploaded_at: Number(ex.uploaded_at || 0),
       round_no: Number(ex.round_no || 1),
       replaced_at: now,
-      replaced_in_round: currentRoundNo,
+      replaced_in_round: evidenceContext.targetRound,
     })
   }
 
@@ -2843,14 +3064,14 @@ export async function uploadMaterialFile(req: any): Promise<PluginResponse> {
     updated_by: _uploadOp || b.updated_by || '', updated_at: now,
     file_name, file_data: object_key || ex.file_data || '', file_size: b.file_size || 0,
     uploaded_at: now,
-    round_no: currentRoundNo,
+    round_no: evidenceContext.targetRound,
     // 保留固化字段
     material_name: ex.material_name || '', required: ex.required ?? 0,
     responsible_role: ex.responsible_role || '', sort_order: ex.sort_order ?? 0,
     // 历史附件（整改追加的旧文件）
     attachments_json: JSON.stringify(attachments),
   })
-  const auditAction = effState === 'remediation_pending' && ex.file_data ? '整改材料追加' : '上传材料'
+  const auditAction = evidenceContext.state === 'remediation_pending' && ex.file_data ? '整改材料追加' : '上传材料'
   await writeAudit(rid, _uploadOp || b.operator_uuid || b.updated_by || '', auditAction, template_id,
     `${auditAction}: ${file_name}`)
   return { body: { ok: true, file_name } }
@@ -2870,17 +3091,26 @@ export async function removeMaterialFile(req: any): Promise<PluginResponse> {
   }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
-  // 材料删除：仅 draft / ready 可操作（发起评审后材料锁定）
-  const effState = getEffectiveState(rv)
-  const canRemove =
-    effState === 'draft' ||
-    effState === 'ready'
-  if (!canRemove) {
-    return { body: { error: '评审已发起，材料不可删除' }, statusCode: 403 }
-  }
+  const evidenceContext = getEvidenceEditContext(rv)
+  const denied = evidenceEditDenied(evidenceContext)
+  if (denied) return denied
   const key = `${rid}_mat_${template_id}`
   const ex = (await matItem.get(key)) as any
   if (!ex) return { body: { error: '材料项不存在' }, statusCode: 404 }
+  let attachments = jsonArr(ex.attachments_json || '[]')
+  if (evidenceContext.state === 'remediation_pending' && ex.file_data) {
+    attachments.push({
+      file_name: ex.file_name || '',
+      file_data: ex.file_data || '',
+      object_key: ex.file_data || '',
+      file_size: Number(ex.file_size || 0),
+      uploaded_by: ex.updated_by || '',
+      uploaded_at: Number(ex.uploaded_at || 0),
+      round_no: Number(ex.round_no || 1),
+      replaced_at: Date.now(),
+      replaced_in_round: evidenceContext.targetRound,
+    })
+  }
   await matItem.set(key, {
     review_uuid: rid, template_id,
     submit_status: 'draft',
@@ -2888,11 +3118,11 @@ export async function removeMaterialFile(req: any): Promise<PluginResponse> {
     updated_by: _removeOp || b.updated_by || '', updated_at: Date.now(),
     file_name: '', file_data: '', file_size: 0,
     uploaded_at: 0,
+    round_no: evidenceContext.targetRound,
     // 保留固化字段
     material_name: ex.material_name || '', required: ex.required ?? 0,
     responsible_role: ex.responsible_role || '', sort_order: ex.sort_order ?? 0,
-    // 草稿阶段清空也清除历史附件
-    attachments_json: '[]',
+    attachments_json: evidenceContext.state === 'remediation_pending' ? JSON.stringify(attachments) : '[]',
   })
   await writeAudit(rid, _removeOp || b.operator_uuid || b.updated_by || '', '删除材料', template_id,
     `清除材料文件`)
@@ -2908,6 +3138,8 @@ export async function getMaterialUploadUrl(req: any): Promise<PluginResponse> {
   if (!rid || !tid) return { body: { error: '缺少必要字段' }, statusCode: 400 }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
+  const denied = evidenceEditDenied(getEvidenceEditContext(rv))
+  if (denied) return denied
   // 检查材料项存在
   const key = `${rid}_mat_${tid}`
   const ex = await matItem.get(key)
@@ -3092,9 +3324,9 @@ export async function updateMaterialStatus(req: any): Promise<PluginResponse> {
   }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
-  if (rv.status === 'completed' || rv.status === 'rejected') {
-    return { body: { error: '评审已结束，不可修改材料' }, statusCode: 403 }
-  }
+  const evidenceContext = getEvidenceEditContext(rv)
+  const denied = evidenceEditDenied(evidenceContext)
+  if (denied) return denied
   const key = `${rid}_mat_${template_id}`
   const ex = await matItem.get(key)
   if (!ex) return { body: { error: '材料项不存在' }, statusCode: 404 }
@@ -3105,9 +3337,11 @@ export async function updateMaterialStatus(req: any): Promise<PluginResponse> {
     file_name: (ex as any).file_name ?? '',
     file_data: (ex as any).file_data ?? '',
     file_size: (ex as any).file_size ?? 0, uploaded_at: (ex as any).uploaded_at ?? 0,
+    round_no: evidenceContext.targetRound,
     // 保留固化字段
     material_name: (ex as any).material_name || '', required: (ex as any).required ?? 0,
     responsible_role: (ex as any).responsible_role || '', sort_order: (ex as any).sort_order ?? 0,
+    attachments_json: (ex as any).attachments_json || '[]',
   })
   return { body: { ok: true } }
 }
@@ -3126,9 +3360,9 @@ export async function updateIndicators(req: any): Promise<PluginResponse> {
   }
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
-  if (rv.status === 'completed' || rv.status === 'rejected') {
-    return { body: { error: '评审已结束，不可修改指标' }, statusCode: 403 }
-  }
+  const evidenceContext = getEvidenceEditContext(rv)
+  const denied = evidenceEditDenied(evidenceContext)
+  if (denied) return denied
   const now = Date.now()
   for (const ind of indicators) {
     const key = `${rid}_ind_${ind.template_id}`
@@ -3141,6 +3375,7 @@ export async function updateIndicators(req: any): Promise<PluginResponse> {
       review_uuid: rid, template_id: ind.template_id, current_value: v,
       notes: ind.notes ?? (ex as any).notes ?? '', risk_color: color,
       updated_by: operator_uuid || '', updated_at: now,
+      round_no: evidenceContext.targetRound,
       // 保留固化字段（不覆盖）
       indicator_name: (ex as any).indicator_name || '', threshold_type: (ex as any).threshold_type || '',
       yellow_threshold: (ex as any).yellow_threshold ?? 0, red_threshold: (ex as any).red_threshold ?? 0,
@@ -4677,7 +4912,7 @@ export async function onIssueStatusChanged(payload: any) {
             const title = (rv as any).review_title || phaseName
             await sendNotification(
               `${((rv as any).review_type || 'dcp').toUpperCase()}评审整改完成 — ${phaseName}`,
-              `「${title}」的 ${allRemediation.length} 个整改项已全部完成，请确认。`,
+              `「${title}」的 ${allRemediation.length} 个整改工作项已全部完成，请确认并发起复审。`,
               (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
               notifyTargets,
             )
@@ -4821,7 +5056,7 @@ export async function syncRemediationStatus(req: any): Promise<PluginResponse> {
           const title = (rv as any).review_title || phaseName
           await sendNotification(
             `${((rv as any).review_type || 'dcp').toUpperCase()}评审整改完成 — ${phaseName}`,
-            `「${title}」的 ${updated.length} 个整改项已全部完成，请确认。`,
+            `「${title}」的 ${updated.length} 个整改工作项已全部完成，请确认并发起复审。`,
             (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
             notifyTargets,
           )
@@ -4914,7 +5149,8 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
   // 1. 给每个整改工作项发评论（备注）
   if (tuid) {
     const reviewNumber = (rv as any).review_number || rid
-    const commentText = `整改已由决议人确认完成（评审单 ${reviewNumber}）。本工作项已锁定，请勿再修改。`
+    const targetRoundNo = Number((rv as any).round_no || 1) + 1
+    const commentText = `整改已确认完成，评审进入第 ${targetRoundNo} 轮复审（评审单 ${reviewNumber}）。`
     for (const item of syncedItems) {
       try {
         await OPFetch(
@@ -4984,19 +5220,8 @@ export async function confirmRemediation(req: any): Promise<PluginResponse> {
   await writeAudit(rid, publisher_uuid, '确认整改完成', rid,
     `整改项 ${syncedItems.length} 个全部完成，${next_action === 're_review' ? '进入复审' : '评审完成'}`)
 
-  // 4. 通知整改负责人工作项已锁定
+  // 4. 通知配置复用于后续复审通知
   const notCfg = await getNotifyConfig()
-  if (notCfg.enabled) {
-    const ownerUUIDs = [...new Set(syncedItems.map((v: any) => v.linked_by).filter(Boolean))] as string[]
-    if (ownerUUIDs.length > 0) {
-      await sendNotification(
-        `${((rv as any).review_type || 'dcp').toUpperCase()}整改已确认 — ${(rv as any).phase_code || ''}`,
-        `「${(rv as any).review_title || (rv as any).phase_code}」整改已由决议人确认完成，关联工作项已锁定。`,
-        (rv as any).project_uuid ? `/project/${(rv as any).project_uuid}` : '',
-        ownerUUIDs,
-      )
-    }
-  }
 
   // 5. 复审时通知评审人重新提交评审意见
   if (next_action === 're_review' && notCfg.enabled && notCfg.on_review_start) {

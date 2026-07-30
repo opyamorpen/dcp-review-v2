@@ -100,7 +100,7 @@ tr:nth-child(even) td { background: #fafafa; }
 <h3>5.6 Publishing Resolutions / 发布决议</h3>
 <ul><li>Only authorized publisher role (typically Chair) can publish.</li><li>System validates prerequisites based on frozen resolution rules.</li><li>Select final conclusion from allowed list.</li><li>Optional conditional notes for Conditional Pass.</li><li>Resolution snapshots all votes, checklist results, indicators, linked issues.</li><li>Veto enforcement: veto role rejection blocks "pass".</li><li>Resolutions are immutable once published.</li></ul>
 <h3>5.7 Remediation & Closure / 整改与闭环</h3>
-<ul><li>Create remediation work items after resolution publication.</li><li>Items are ONES issues with link_type = remediation.</li><li>Status changes monitored via event hooks.</li><li>When all remediation items done: publisher confirms completion -> Completed state.</li><li>Or trigger re-review -> re_reviewing state with new round.</li><li>Remediation items are locked (cannot delete while locked).</li></ul>
+<ul><li>Create remediation work items after resolution publication.</li><li>Items are ONES issues with link_type = remediation.</li><li>Status changes monitored via event hooks.</li><li>When all remediation items are done, the publisher confirms completion and starts re-review.</li><li>Remediation items remain editable under normal ONES permissions; re-review waits until all are complete.</li></ul>
 <h3>5.8 Round Comparison / 多轮对比</h3>
 <p>Compare Rounds tab shows side-by-side: reviewer opinions, resolution conclusions, indicator values, material statuses across review rounds.</p>
 <div class="break"></div><h2>6. State Machine & Transitions / 状态机与流转</h2>
@@ -126,7 +126,7 @@ tr:nth-child(even) td { background: #fafafa; }
 <h3>Creating New Work Items / 新建工作项</h3>
 <ul><li>Select issue type from project-scoped list.</li><li>Enter title and assignee.</li><li>Auto-linked to review.</li><li>Fallback URL if direct creation fails.</li></ul>
 <h3>Remediation Work Items / 整改工作项</h3>
-<ul><li>Special linked issues with link_type = remediation.</li><li>Created after resolution to track corrective actions.</li><li>Status changes monitored via ONES event hooks.</li><li>All done -> review can transition to completed.</li><li>Locked items cannot be deleted while locked.</li></ul>
+<ul><li>Special linked issues with link_type = remediation.</li><li>Created after resolution to track corrective actions.</li><li>Status changes monitored via ONES event hooks.</li><li>All done -> review can enter re-review.</li><li>Items are not locked; incomplete or unknown status blocks re-review.</li></ul>
 <div class="break"></div><h2>10. Audit Trail / 审计追溯</h2>
 <p>Every significant action is logged:</p>
 <ul><li>Review creation, deletion, recreation.</li><li>Status transitions and state changes.</li><li>Material submissions and updates.</li><li>Indicator updates.</li><li>Reviewer assignments and opinion submissions.</li><li>Resolution generation and publication.</li><li>Issue linking and remediation tracking.</li><li>Supplement notes.</li></ul>
