@@ -7,6 +7,9 @@ const plugin = yaml.load(fs.readFileSync('config/plugin.yaml', 'utf8'))
 const projectPage = fs.readFileSync('web/src/modules/dcp-review-tab/index.tsx', 'utf8')
 const workspace = fs.readFileSync('web/src/modules/dcp-reviewer-workspace/index.tsx', 'utf8')
 const projectApi = fs.readFileSync('web/src/modules/dcp-review-tab/api.ts', 'utf8')
+const projectIssueTypes = fs.readFileSync('web/src/project-issue-types.ts', 'utf8')
+const remediationPanel = fs.readFileSync('web/src/modules/dcp-review-tab/RemediationPanel.tsx', 'utf8')
+const configPage = fs.readFileSync('web/src/modules/dcp-config-page/index.tsx', 'utf8')
 
 const transitionHandler = backend.slice(
   backend.indexOf('export async function transitionReview'),
@@ -80,6 +83,46 @@ assert.match(remediationHandler, /客户端状态只能作为观察值/)
 assert.equal(remediationHandler.includes('isIssueStatusDone'), false)
 assert.equal(projectPage.includes('is_done: isDone'), false)
 assert.equal(workspace.includes('is_done: isDone'), false)
+
+const backendIssueTypeLookup = backend.slice(
+  backend.indexOf('async function getProjectIssueTypes'),
+  backend.indexOf('export async function linkIssue'),
+)
+assert.match(backendIssueTypeLookup, /stamps\/data\?t=issue_type_config/)
+assert.match(backendIssueTypeLookup, /project\(key:/)
+assert.equal(backendIssueTypeLookup.includes('issueTypes(orderBy'), false)
+
+const backendCreateIssue = backend.slice(
+  backend.indexOf('export async function createIssue'),
+  backend.indexOf('// ============================================================\n// 发布决议'),
+)
+assert.ok(backendCreateIssue.indexOf('REMEDIATION_ISSUE_TYPE_NOT_AVAILABLE') < backendCreateIssue.indexOf('/tasks/add3'))
+assert.match(backendCreateIssue, /REMEDIATION_ISSUE_TYPE_UNVERIFIED/)
+assert.match(backendCreateIssue, /link_type: 'remediation'/)
+assert.match(backend, /remediation_issue_type_uuid/)
+
+assert.match(projectIssueTypes, /stamps\/data\?t=issue_type_config/)
+assert.match(projectIssueTypes, /projectIssueTypes/)
+assert.equal(projectIssueTypes.includes('issueTypes(orderBy'), false)
+
+const workspaceCreateIssueStart = workspace.indexOf('async function handleCreateIssue')
+const workspaceCreateIssue = workspace.slice(
+  workspaceCreateIssueStart,
+  workspace.indexOf('\n return (', workspaceCreateIssueStart),
+)
+assert.ok(workspaceCreateIssue.indexOf('resolveCreationIssueType()') < workspaceCreateIssue.indexOf('/tasks/add3'))
+assert.match(workspaceCreateIssue, /已创建，但关联评审单失败/)
+assert.equal(workspaceCreateIssue.includes('} catch {}'), false)
+
+const projectCreateIssue = projectPage.slice(
+  projectPage.indexOf('async function handleCreateRemediationIssue'),
+  projectPage.indexOf('async function handleLinkRemediationIssue'),
+)
+assert.ok(projectCreateIssue.indexOf('resolveProjectIssueTypes') < projectCreateIssue.indexOf('/tasks/add3'))
+assert.match(projectCreateIssue, /field_uuid: 'field007'/)
+assert.match(projectCreateIssue, /已创建，但关联评审单失败/)
+assert.match(remediationPanel, /disabled=\{creationBlocked\}/)
+assert.match(configPage, /remediation_issue_type_uuid: remediationIssueTypeUuid/)
 
 const entities = plugin.storage.entities
 const issueEntity = entities.find(entity => entity.name === 'dcp_linked_issue')

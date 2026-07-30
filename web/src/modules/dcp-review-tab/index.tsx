@@ -4,6 +4,12 @@ import { RemediationPanel } from './RemediationPanel'
 import { RoundCompare } from './RoundCompare'
 import * as api from './api'
 import { getTeamUUID, checkPermission } from '../../api'
+import {
+  findConfiguredIssueType,
+  remediationTypeBlockedMessage,
+  resolveProjectIssueTypes,
+  type ProjectIssueType,
+} from '../../project-issue-types'
 
 // ============================================================
 // 常量
@@ -881,6 +887,11 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
   const [creatingRemediation, setCreatingRemediation] = useState(false)
   const [linkingRemediation, setLinkingRemediation] = useState(false)
   const [remediationIssueType, setRemediationIssueType] = useState('')
+  const [remediationIssueTypeUuid, setRemediationIssueTypeUuid] = useState('')
+  const [remediationConfigLoaded, setRemediationConfigLoaded] = useState(false)
+  const [projectIssueTypes, setProjectIssueTypes] = useState<ProjectIssueType[]>([])
+  const [projectTypesVerified, setProjectTypesVerified] = useState(false)
+  const [projectTypesLoading, setProjectTypesLoading] = useState(true)
 
   useEffect(() => {
     fetch('/project/api/project/users/me', { credentials: 'include' })
@@ -897,9 +908,39 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
       setResolutionRule(rules[rvReviewType] || null)
       setConfigRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === rvReviewType))
       if (c.review_recall_config) setRecallConfig(c.review_recall_config)
-      if (c.config?.remediation_issue_type) setRemediationIssueType(c.config.remediation_issue_type)
-    }).catch(() => {})
+      setRemediationIssueType(c.config?.remediation_issue_type || '')
+      setRemediationIssueTypeUuid(c.config?.remediation_issue_type_uuid || '')
+    }).catch(() => {}).finally(() => setRemediationConfigLoaded(true))
   }, [rvReviewType])
+
+  useEffect(() => {
+    let canceled = false
+    setProjectTypesLoading(true)
+    setProjectTypesVerified(false)
+    resolveProjectIssueTypes(getTeamUUID(), projectUuid).then(result => {
+      if (canceled) return
+      setProjectIssueTypes(result.types)
+      setProjectTypesVerified(result.verified)
+    }).finally(() => {
+      if (!canceled) setProjectTypesLoading(false)
+    })
+    return () => { canceled = true }
+  }, [projectUuid])
+
+  const configuredRemediationType = findConfiguredIssueType(
+    projectIssueTypes,
+    remediationIssueType,
+    remediationIssueTypeUuid,
+  )
+  const remediationTypeStatus: 'loading' | 'available' | 'missing' | 'unknown' | 'unconfigured' =
+    !remediationConfigLoaded || projectTypesLoading ? 'loading'
+      : !remediationIssueType && !remediationIssueTypeUuid ? 'unconfigured'
+        : !projectTypesVerified ? 'unknown'
+          : configuredRemediationType ? 'available' : 'missing'
+  const remediationTypeMessage = remediationTypeBlockedMessage(
+    remediationTypeStatus,
+    remediationIssueType || remediationIssueTypeUuid,
+  )
 
   // 判断当前用户是否有权发布决议（按规则配置的唯一决议角色）
   const canPublish = !!resolutionRule && (data.reviewers || []).some((r: any) =>
@@ -1097,6 +1138,16 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
     setRemediationMsg('')
     try {
       const tuid = getTeamUUID()
+      const lookup = await resolveProjectIssueTypes(tuid, projectUuid)
+      setProjectIssueTypes(lookup.types)
+      setProjectTypesVerified(lookup.verified)
+      if (!lookup.verified) throw new Error('无法确认当前项目的工作项类型，不允许新建整改项。请刷新后重试。')
+      const configured = findConfiguredIssueType(lookup.types, remediationIssueType, remediationIssueTypeUuid)
+      if ((remediationIssueType || remediationIssueTypeUuid) && !configured) {
+        throw new Error(remediationTypeBlockedMessage('missing', remediationIssueType || remediationIssueTypeUuid))
+      }
+      const selectedType = configured || lookup.types[0]
+      if (!selectedType) throw new Error('当前项目没有可用的工作项类型，不允许新建整改项。')
       const taskUuid = Array.from({ length: 16 }, () => '0123456789abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 36)]).join('')
       const add3Res = await fetch(`/project/api/project/team/${tuid}/tasks/add3`, {
         method: 'POST', credentials: 'include',
@@ -1104,10 +1155,12 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
         body: JSON.stringify({
           tasks: [{
             uuid: taskUuid,
-            project_uuid: projectUuid,
+            project_uuid: lookup.project_uuid,
+            issue_type_uuid: selectedType.issue_type_uuid,
             field_values: [
               { field_uuid: 'field001', value: createRemediationForm.title },
-              { field_uuid: 'field006', value: projectUuid },
+              { field_uuid: 'field006', value: lookup.project_uuid },
+              { field_uuid: 'field007', value: selectedType.issue_type_uuid },
             ],
           }],
         }),
@@ -1116,16 +1169,22 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
         const data = await add3Res.json()
         const task = data?.tasks?.[0]
         if (task?.uuid) {
-          await api.linkIssue(rv.review_uuid, {
-            issue_uuid: task.uuid,
-            issue_number: task.display_id || task.uuid,
-            issue_title: createRemediationForm.title,
-            issue_type: remediationIssueType || '',
-            issue_status: '',
-            linked_by: currentUser.uuid || '',
-            linked_by_name: currentUser.name || '',
-            link_type: 'remediation',
-          })
+          try {
+            await api.linkIssue(rv.review_uuid, {
+              issue_uuid: task.uuid,
+              issue_number: task.display_id || task.uuid,
+              issue_title: createRemediationForm.title,
+              issue_type: task.issue_type_name || selectedType.name,
+              issue_status: '',
+              linked_by: currentUser.uuid || '',
+              linked_by_name: currentUser.name || '',
+              link_type: 'remediation',
+            })
+          } catch (linkError: any) {
+            setRemediationMsg(`工作项 ${task.display_id || task.uuid} 已创建，但关联评审单失败：${linkError.message || '未知错误'}`)
+            onRefresh()
+            return
+          }
           setCreateRemediationForm({ title: '' })
           setShowCreateRemediation(false)
           // 关联后立即同步真实状态
@@ -1490,6 +1549,8 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
             isCreator={currentUser.uuid === rv.creator_uuid}
             isPublisher={canPublish}
             remediationIssueType={remediationIssueType}
+            remediationTypeStatus={remediationTypeStatus}
+            remediationTypeMessage={remediationTypeMessage}
             projectUuid={projectUuid}
             remediationMsg={remediationMsg}
             remediationRefreshing={remediationRefreshing}

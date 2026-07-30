@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import { getTeamUUID } from '../../api'
+import {
+ findConfiguredIssueType,
+ remediationTypeBlockedMessage,
+ resolveProjectIssueTypes,
+} from '../../project-issue-types'
 
 // ============================================================
 // 复用 dcp-review-tab 的 API 层
@@ -508,6 +513,9 @@ const ReviewerWorkspace: React.FC<{
  const [resolutionRule, setResolutionRule] = useState<any>(null)
  const [configRoles, setConfigRoles] = useState<any[]>([])
  const [remediationIssueType, setRemediationIssueType] = useState('')
+ const [remediationIssueTypeUuid, setRemediationIssueTypeUuid] = useState('')
+ const [remediationConfigLoaded, setRemediationConfigLoaded] = useState(false)
+ const [projectTypesVerified, setProjectTypesVerified] = useState(false)
 
  // 加载当前评审类型的决议规则配置 + 角色列表 + 整改项类型
  const _rvReviewType = (rv.review_type || 'dcp')
@@ -517,9 +525,23 @@ const ReviewerWorkspace: React.FC<{
      setResolutionRule(rules[_rvReviewType] || null)
      setConfigRoles((c.roles || []).filter((r: any) => (r.review_type || 'dcp') === _rvReviewType))
      setRemediationIssueType(c.config?.remediation_issue_type || '')
-   }).catch(() => {})
+     setRemediationIssueTypeUuid(c.config?.remediation_issue_type_uuid || '')
+   }).catch(() => {}).finally(() => setRemediationConfigLoaded(true))
  }, [_rvReviewType])
  const canPublish = !!resolutionRule && (resolutionRule.publisher?.role || '') === myRole
+ const configuredProjectType = findConfiguredIssueType(issueTypes, remediationIssueType, remediationIssueTypeUuid)
+ const remediationTypeStatus: 'loading' | 'available' | 'missing' | 'unknown' | 'unconfigured' =
+   !remediationConfigLoaded || loadingTypes ? 'loading'
+     : !remediationIssueType && !remediationIssueTypeUuid ? 'unconfigured'
+       : !projectTypesVerified ? 'unknown'
+         : configuredProjectType ? 'available' : 'missing'
+ const remediationTypeMessage = remediationTypeBlockedMessage(
+   remediationTypeStatus,
+   remediationIssueType || remediationIssueTypeUuid,
+ )
+ const remediationCreationBlocked = remediationTypeStatus === 'loading'
+   || remediationTypeStatus === 'missing'
+   || remediationTypeStatus === 'unknown'
 
 // 前端复用 isResolutionReady 逻辑（与后端 listMyReviews 保持一致）
 // 排除决议角色——决议人不参与前置评审提交判断
@@ -573,31 +595,22 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  }
  }, [currentUser])
 
- // 加载项目的工作项类型（先解析短标识符为真实 UUID）
+ // 只加载项目已启用的工作项类型；团队级类型不能证明当前项目可用。
  useEffect(() => {
  if (!rv.project_uuid) return
+ let canceled = false
  setLoadingTypes(true)
- // 先解析项目标识符
+ setProjectTypesVerified(false)
  ;(async () => {
- let puid = rv.project_uuid || ''
- try {
- const tuid = tu()
- const exchRes = await fetch(
- `/project/api/ones-project/team/${tuid}/projects/exchange/${puid}`,
- { credentials: 'include' }
- )
-
-
- if (exchRes.ok) {
- const exch = await exchRes.json()
- const resolved = exch.project_uuid || exch.data?.project_uuid || ''
- if (resolved) {
- puid = resolved
- setCreateIssueForm(f => ({ ...f, project_uuid: resolved }))
+ const result = await resolveProjectIssueTypes(tu(), rv.project_uuid || '')
+ if (canceled) return
+ setIssueTypes(result.types)
+ setProjectTypesVerified(result.verified)
+ setCreateIssueForm(f => ({ ...f, project_uuid: result.project_uuid }))
  // 获取项目名称
  try {
  const stampRes = await fetch(
- `/project/api/project/team/${tuid}/project/${resolved}/stamps/data?t=project`,
+ `/project/api/project/team/${tu()}/project/${result.project_uuid}/stamps/data?t=project`,
  { method: 'POST', credentials: 'include',
  headers: { 'Content-Type': 'application/json' },
  body: JSON.stringify({ project: 0 }),
@@ -610,118 +623,38 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  if (proj?.name) setProjectDisplayName(proj.name)
  }
  } catch {}
- }
- }
- } catch {}
- // 三级回退加载工作项类型：
- // ① stamps/data — 项目级 stamp（返回 IssueTypeScope.uuid + issue_type_uuid）
- // ② items/graphql 项目级查询
- // ③ items/graphql 团队级查询（兜底，scope_uuid 和 issue_type_uuid 相同）
- // 类型对象统一格式: { scope_uuid, issue_type_uuid, name }
- // - scope_uuid: 项目内类型作用域 UUID（用于 tasks/add3 issue_type_uuid 参数）
- // - issue_type_uuid: 全局工作项类型 UUID
- let loadedTypes: any[] | null = null
-
- // ① stamps/data（ONES 原生格式：body = { stamp_type: timestamp }）
- try {
- const stampBody: any = { issue_type_config: Date.now() }
- const stampRes = await fetch(
- `/project/api/project/team/${tu()}/project/${puid}/stamps/data?t=issue_type_config`,
- { method: 'POST', credentials: 'include',
- headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify(stampBody),
- }
- )
- if (stampRes.ok) {
- const sdata = await stampRes.json()
- const stampRaw = sdata?.data || sdata || {}
- const cfg = stampRaw.issue_type_config
- // stamps/data 返回格式可能是：
- // - 数组：[{uuid, name, issue_type_uuid, ...}]
- // - 对象：{issue_type_configs: [{uuid, name, issue_type_uuid, ...}]}
- let typesRaw: any[] = []
- if (Array.isArray(cfg)) {
- typesRaw = cfg
- } else if (cfg && Array.isArray(cfg.issue_type_configs)) {
- typesRaw = cfg.issue_type_configs
- } else if (cfg && Array.isArray(cfg.issue_types)) {
- typesRaw = cfg.issue_types
- }
- if (typesRaw.length > 0) {
- const types = typesRaw.map((t: any) => ({
- // uuid = IssueTypeScope.uuid（项目内类型作用域），issue_type_uuid = 全局类型 UUID
- scope_uuid: t.uuid || '',
- issue_type_uuid: t.issue_type_uuid || t.uuid || '',
- name: t.name || t.issue_type_name || t.type_name || t.display_name || '',
- })).filter((t: any) => t.name)
- if (types.length > 0) loadedTypes = types
- }
- }
- } catch {}
-
- // ② 项目级 GraphQL
- if (!loadedTypes) {
- try {
- const projGqlRes = await fetch(
- `/project/api/project/team/${tu()}/items/graphql?t=projectIssueTypes`,
- { method: 'POST', credentials: 'include',
- headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify({
- query: `{ project(key: "project-${puid}") { issueTypes { uuid name } } }`,
- variables: {},
- }),
- }
- )
- if (projGqlRes.ok) {
- const gql = await projGqlRes.json()
- const typesRaw = gql?.data?.project?.issueTypes || []
- if (Array.isArray(typesRaw) && typesRaw.length > 0) {
- loadedTypes = typesRaw.map((t: any) => ({
- scope_uuid: t.uuid || '',
- issue_type_uuid: t.issue_type_uuid || t.uuid || '',
- name: t.name || '',
- })).filter((t: any) => t.name)
- }
- }
- } catch {}
- }
-
- // ③ 团队级 GraphQL（兜底：scope_uuid 和 issue_type_uuid 相同）
- if (!loadedTypes) {
- try {
- const gqlRes = await fetch(
- `/project/api/project/team/${tu()}/items/graphql?t=issueTypes`,
- { method: 'POST', credentials: 'include',
- headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify({ query: '{ issueTypes(orderBy: { namePinyin: ASC }) { uuid name } }', variables: {} }),
- }
- )
- if (gqlRes.ok) {
- const gql = await gqlRes.json()
- const raw = gql?.data?.issueTypes || []
- if (raw.length > 0) {
- loadedTypes = raw.map((t: any) => ({
- scope_uuid: t.uuid || '',
- issue_type_uuid: t.uuid || '',
- name: t.name || '',
- })).filter((t: any) => t.name)
- }
- }
- } catch {}
- }
-
- if (loadedTypes && loadedTypes.length > 0) {
- setIssueTypes(loadedTypes)
- const first = loadedTypes[0]
- setCreateIssueForm(f => ({
- ...f,
- issue_type_scope_uuid: first.scope_uuid || '',
- issue_type_id: first.issue_type_uuid || '',
- }))
- }
  setLoadingTypes(false)
  })()
+ return () => { canceled = true }
  }, [rv.project_uuid])
+
+ useEffect(() => {
+ if (loadingTypes || !projectTypesVerified) return
+ const selectedType = findConfiguredIssueType(issueTypes, remediationIssueType, remediationIssueTypeUuid)
+   || ((!remediationIssueType && !remediationIssueTypeUuid) ? issueTypes[0] : undefined)
+ if (!selectedType) return
+ setCreateIssueForm(f => ({
+   ...f,
+   issue_type_scope_uuid: selectedType.scope_uuid,
+   issue_type_id: selectedType.issue_type_uuid,
+ }))
+ }, [loadingTypes, projectTypesVerified, issueTypes, remediationIssueType, remediationIssueTypeUuid])
+
+ async function resolveCreationIssueType() {
+ const result = await resolveProjectIssueTypes(tu(), createIssueForm.project_uuid || rv.project_uuid || '')
+ setIssueTypes(result.types)
+ setProjectTypesVerified(result.verified)
+ if (!result.verified) throw new Error('无法确认当前项目的工作项类型，不允许新建整改项。请刷新后重试。')
+ const configured = findConfiguredIssueType(result.types, remediationIssueType, remediationIssueTypeUuid)
+ if ((remediationIssueType || remediationIssueTypeUuid) && !configured) {
+   throw new Error(remediationTypeBlockedMessage('missing', remediationIssueType || remediationIssueTypeUuid))
+ }
+ const selected = configured || result.types.find(item =>
+   item.scope_uuid === createIssueForm.issue_type_scope_uuid
+   || item.issue_type_uuid === createIssueForm.issue_type_id)
+ if (!selected) throw new Error('请选择当前项目已启用的工作项类型')
+ return { projectUuid: result.project_uuid, issueType: selected }
+ }
 
  async function submitOpinion() {
  if (!opinionForm.reviewer_uuid || !opinionForm.role_name || !opinionForm.conclusion) {
@@ -882,25 +815,21 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
 
  // 调用 exchange API 解析项目标识符为真实 UUID
  async function resolveAndOpenCreateIssue() {
+ if (remediationCreationBlocked) {
+   setCreateIssueMsg(remediationTypeMessage || '正在确认当前项目的工作项类型，请稍后重试。')
+   return
+ }
  setResolvingProject(true)
  try {
- const tuid = tu()
- // 尝试 exchange API（ONES 内置路径）
- const exchRes = await fetch(
- `/project/api/ones-project/team/${tuid}/projects/exchange/${rv.project_uuid}`,
- { credentials: 'include' }
- )
- let realUUID = rv.project_uuid
- if (exchRes.ok) {
- try {
- const exch = await exchRes.json()
- realUUID = exch.project_uuid || exch.data?.project_uuid || rv.project_uuid
- } catch {}
+ const result = await resolveProjectIssueTypes(tu(), rv.project_uuid || '')
+ if (!result.verified) throw new Error('无法确认当前项目的工作项类型，不允许新建整改项。请刷新后重试。')
+ if ((remediationIssueType || remediationIssueTypeUuid)
+   && !findConfiguredIssueType(result.types, remediationIssueType, remediationIssueTypeUuid)) {
+   throw new Error(remediationTypeBlockedMessage('missing', remediationIssueType || remediationIssueTypeUuid))
  }
- window.parent.location.href = `${window.parent.location.origin}/project/#/team/${tuid}/project/${realUUID}/task/create`
- } catch {
- // 兜底：直接用存储的值（可能是短标识符，会报错但至少跳转了）
- try { window.parent.location.href = `${window.parent.location.origin}/project/#/team/${tu()}/project/${rv.project_uuid}/task/create` } catch {}
+ window.parent.location.href = `${window.parent.location.origin}/project/#/team/${tu()}/project/${result.project_uuid}/task/create`
+ } catch (e: any) {
+ setCreateIssueMsg(e.message || '无法打开 ONES 新建页面')
  }
  setResolvingProject(false)
  }
@@ -919,16 +848,17 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  setCreateIssueMsg('')
  setCreateIssueFallback('')
 
- // 当配置了整改项类型时，从 issueTypes 中按名称匹配 scope_uuid/issue_type_uuid
- let scopeUuid = createIssueForm.issue_type_scope_uuid
- let typeUuid = createIssueForm.issue_type_id
- if (remediationIssueType && issueTypes.length > 0) {
-   const matched = issueTypes.find((t: any) => t.name === remediationIssueType)
-   if (matched) {
-     scopeUuid = matched.scope_uuid
-     typeUuid = matched.issue_type_uuid
-   }
+ let resolvedType: Awaited<ReturnType<typeof resolveCreationIssueType>>
+ try {
+   resolvedType = await resolveCreationIssueType()
+ } catch (e: any) {
+   setCreateIssueMsg(e.message || '当前项目的整改工作项类型不可用')
+   setCreating(false)
+   return
  }
+ const scopeUuid = resolvedType.issueType.scope_uuid
+ const typeUuid = resolvedType.issueType.issue_type_uuid
+ const realProjectUuid = resolvedType.projectUuid
 
  try {
  // 方式一：前端 fetch 直调 tasks/add3
@@ -941,11 +871,11 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  body: JSON.stringify({
  tasks: [{
  uuid: taskUuid,
- project_uuid: createIssueForm.project_uuid,
+ project_uuid: realProjectUuid,
  issue_type_uuid: typeUuid || undefined,
  field_values: [
  { field_uuid: 'field001', value: createIssueForm.title },
- { field_uuid: 'field006', value: createIssueForm.project_uuid },
+ { field_uuid: 'field006', value: realProjectUuid },
  { field_uuid: 'field007', value: typeUuid },
  { field_uuid: 'field004', value: createIssueForm.assignee_uuid },
  ],
@@ -963,19 +893,24 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  issue_uuid: task.uuid,
  issue_number: task.display_id || task.uuid,
  issue_title: createIssueForm.title,
- issue_type: task.issue_type_name || typeUuid,
+ issue_type: task.issue_type_name || resolvedType.issueType.name,
  issue_status: '',
  linked_by: currentUser.uuid || '',
  linked_by_name: currentUser.name || '',
  link_type: 'remediation',
  })
- } catch {}
- const firstType = issueTypes[0] || ({} as any)
+ } catch (linkError: any) {
+ setCreateIssueMsg(`工作项 ${task.display_id || task.uuid} 已创建，但关联评审单失败：${linkError.message || '未知错误'}`)
+ onRefresh()
+ setCreating(false)
+ return
+ }
+ const resetType = (remediationIssueType || remediationIssueTypeUuid) ? resolvedType.issueType : (issueTypes[0] || resolvedType.issueType)
  setCreateIssueForm({
  title: '',
- issue_type_scope_uuid: firstType.scope_uuid || '',
- issue_type_id: firstType.issue_type_uuid || '',
- project_uuid: rv.project_uuid || '',
+ issue_type_scope_uuid: resetType.scope_uuid || '',
+ issue_type_id: resetType.issue_type_uuid || '',
+ project_uuid: realProjectUuid,
  assignee_uuid: currentUser.uuid || '',
  })
  setCreateIssueMsg(`创建工作项成功: ${task.display_id || task.uuid}`)
@@ -1001,7 +936,7 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  try {
  await callApi(`/dcp/review/${rv.review_uuid}/create-issue`, 'POST', {
    title: createIssueForm.title,
-   project_uuid: createIssueForm.project_uuid,
+   project_uuid: realProjectUuid,
    issue_type_scope_uuid: scopeUuid,
    issue_type_uuid: typeUuid,
    assignee_uuid: createIssueForm.assignee_uuid || currentUser.uuid || '',
@@ -1009,12 +944,12 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
    linked_by_name: currentUser.name || '',
    ones_origin: window.location.origin,
  })
- const firstType = issueTypes[0] || ({} as any)
+ const resetType = (remediationIssueType || remediationIssueTypeUuid) ? resolvedType.issueType : (issueTypes[0] || resolvedType.issueType)
  setCreateIssueForm({
  title: '',
- issue_type_scope_uuid: firstType.scope_uuid || '',
- issue_type_id: firstType.issue_type_uuid || '',
- project_uuid: rv.project_uuid || '',
+ issue_type_scope_uuid: resetType.scope_uuid || '',
+ issue_type_id: resetType.issue_type_uuid || '',
+ project_uuid: realProjectUuid,
  assignee_uuid: currentUser.uuid || '',
  })
  onRefresh()
@@ -1165,6 +1100,11 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  ) : (
  <>
  <h4 style={{ ...S.sectionTitle, fontSize: 13 }}>+ 创建整改项</h4>
+ {remediationTypeMessage && (
+   <div style={{ marginBottom: 8, padding: '8px 10px', borderRadius: 4, fontSize: 12, background: '#fff2f0', color: '#cf1322', border: '1px solid #ffccc7' }}>
+     {remediationTypeMessage}
+   </div>
+ )}
  {createIssueMsg && <div style={{ marginBottom: 8, padding: '6px 10px', borderRadius: 4, fontSize: 12, background: createIssueFallback ? '#fff7e6' : '#fff2f0', color: createIssueFallback ? '#faad14' : '#cf1322' }}>{createIssueMsg}
  {createIssueFallback && (
  <div style={{ marginTop: 8 }}>
@@ -1180,23 +1120,18 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
  <div style={S.formGroup}>
  <label style={S.label}>标题 *</label>
- <input style={{ ...S.input, width: 200 }} value={createIssueForm.title} onChange={e => setCreateIssueForm({ ...createIssueForm, title: e.target.value })} placeholder="工作项标题" />
+ <input style={{ ...S.input, width: 200 }} value={createIssueForm.title} onChange={e => setCreateIssueForm({ ...createIssueForm, title: e.target.value })} placeholder="工作项标题" disabled={remediationCreationBlocked} />
  </div>
  <div style={S.formGroup}>
  <label style={S.label}>类型{remediationIssueType ? '' : ''}</label>
  {loadingTypes ? <span style={{ fontSize: 12, color: '#999' }}>加载中…</span> :
- remediationIssueType ? (
+ (remediationIssueType || remediationIssueTypeUuid) ? (
    // 配置了整改项类型：锁定显示，不可修改
-   <input style={{ ...S.input, background: '#f5f5f5', color: '#666' }} value={remediationIssueType} disabled />
+   <input style={{ ...S.input, background: '#f5f5f5', color: '#666' }} value={remediationIssueType || remediationIssueTypeUuid} disabled />
  ) : (
    // 未配置：允许选择
    <SearchableTypePicker
-     types={issueTypes.length > 0 ? issueTypes : [
-       { scope_uuid: '', issue_type_uuid: '', name: '任务' },
-       { scope_uuid: '', issue_type_uuid: '', name: '需求' },
-       { scope_uuid: '', issue_type_uuid: '', name: '缺陷' },
-       { scope_uuid: '', issue_type_uuid: '', name: '子任务' },
-     ]}
+     types={issueTypes}
      value={createIssueForm.issue_type_scope_uuid}
      onChange={(scopeUuid, issueTypeUuid) => setCreateIssueForm({
        ...createIssueForm, issue_type_scope_uuid: scopeUuid, issue_type_id: issueTypeUuid,
@@ -1214,10 +1149,10 @@ const canPublishResolution = canPublish && rv.status === 'reviewing' && resoluti
  <UserPicker value={createIssueForm.assignee_uuid} onChange={u => setCreateIssueForm({ ...createIssueForm, assignee_uuid: u.uuid })} placeholder="搜索用户…（必填）" />
  </div>
  <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
- <button style={{ ...S.btn(true), marginBottom: 0 }} onClick={handleCreateIssue} disabled={creating}>
+ <button style={{ ...S.btn(true), marginBottom: 0 }} onClick={handleCreateIssue} disabled={creating || remediationCreationBlocked}>
  {creating ? '创建中…' : '创建整改项'}
  </button>
- <button style={{ ...S.btn(false), marginBottom: 0 }} onClick={resolveAndOpenCreateIssue} disabled={resolvingProject}>
+ <button style={{ ...S.btn(false), marginBottom: 0 }} onClick={resolveAndOpenCreateIssue} disabled={resolvingProject || remediationCreationBlocked}>
  {resolvingProject ? '解析中…' : '跳转ONES手动创建'}
  </button>
  </div>

@@ -76,7 +76,8 @@ const App: React.FC = () => {
  const [ipdFlowLayout, setIpdFlowLayout] = useState<any>(null)
  const [resolutionRules, setResolutionRules] = useState<any>({ dcp: null, tr: null })
  const [recallConfig, setRecallConfig] = useState<any>({ enabled: false, allowedBeforeResolution: true, requireReason: true, clearSubmittedOpinions: true })
- const [remediationIssueType, setRemediationIssueType] = useState('任务')
+ const [remediationIssueType, setRemediationIssueType] = useState('')
+ const [remediationIssueTypeUuid, setRemediationIssueTypeUuid] = useState('')
  const [profiles, setProfiles] = useState<any[]>([])
  const [projectBindings, setProjectBindings] = useState<any[]>([])
 
@@ -108,7 +109,8 @@ const App: React.FC = () => {
  if (data.checklistItems?.length) setChecklistItems(data.checklistItems.map((c: any) => ({ ...c, review_type: c.review_type || 'dcp' })))
  if (data.notify_config) setNotifyConfig(data.notify_config)
  if (data.review_recall_config) setRecallConfig(data.review_recall_config)
- if (data.config?.remediation_issue_type) setRemediationIssueType(data.config.remediation_issue_type)
+ setRemediationIssueType(data.config?.remediation_issue_type || '')
+ setRemediationIssueTypeUuid(data.config?.remediation_issue_type_uuid || '')
  if (data.ipd_flow_layout) setIpdFlowLayout(data.ipd_flow_layout)
  if (data.resolution_rule_config) setResolutionRules(data.resolution_rule_config)
  setProfiles(profileData.profiles || [])
@@ -121,6 +123,11 @@ const App: React.FC = () => {
  setSaving(true); setMessage('')
  try {
  if (phases.every(p => !p.phase_name)) { setMessage('至少需要填一个阶段名称'); setSaving(false); return }
+ if (remediationIssueType.trim() && !remediationIssueTypeUuid) {
+   setMessage('整改工作项默认类型必须从团队已有工作项类型中选择')
+   setSaving(false)
+   return
+ }
  const normPhase = (arr: any[]) => arr.map(x => ({ ...x, review_type: x.review_type || 'dcp', dependencies: x.dependencies || '[]' }))
  const normType = (arr: any[]) => arr.map(x => ({ ...x, review_type: x.review_type || 'dcp' }))
  const body = {
@@ -131,11 +138,14 @@ const App: React.FC = () => {
  review_recall_config: recallConfig,
  ipd_flow_layout: ipdFlowLayout,
  resolution_rule_config: resolutionRules,
- config: { remediation_issue_type: remediationIssueType },
+ config: {
+   remediation_issue_type: remediationIssueType,
+   remediation_issue_type_uuid: remediationIssueTypeUuid,
+ },
  }
  const res = await apiPost('/dcp/config', body)
  if (res.error) { setMessage('保存失败: ' + res.error) }
- else { setMessage('配置已保存，仅对后续新建评审单生效，已创建评审单不受影响。'); setEditing(false) }
+ else { setMessage('配置已保存。'); setEditing(false) }
  } catch (err: any) { setMessage('保存失败: ' + err.message) }
  finally { setSaving(false) }
  }
@@ -177,7 +187,12 @@ const App: React.FC = () => {
  {nav === 'ipdflow' && <IpdFlowLayoutConfig layout={ipdFlowLayout} phases={phases} onChange={setIpdFlowLayout} editing={editing} />}
  {nav === 'notify' && <NotifySettings config={notifyConfig} onChange={setNotifyConfig} editing={editing} />}
  {nav === 'recall' && <RecallSettings config={recallConfig} onChange={setRecallConfig} editing={editing} />}
- {nav === 'remediation' && <RemediationSettings issueType={remediationIssueType} onChange={setRemediationIssueType} editing={editing} />}
+ {nav === 'remediation' && <RemediationSettings
+   issueType={remediationIssueType}
+   issueTypeUuid={remediationIssueTypeUuid}
+   onChange={(name, uuid) => { setRemediationIssueType(name); setRemediationIssueTypeUuid(uuid) }}
+   editing={editing}
+ />}
  {nav === 'profiles' && <ReviewerProfilesPanel profiles={profiles.filter((p: any) => (p.review_type || 'dcp') === reviewType)} projectBindings={projectBindings.filter((b: any) => (b.review_type || 'dcp') === reviewType)} roles={roles.filter((r: any) => (r.review_type || 'dcp') === reviewType)} reviewType={reviewType} onRefresh={() => loadConfig(false)} />}
  </div>
  {editing && nav !== 'profiles' && (
@@ -662,7 +677,12 @@ const RecallSettings: React.FC<{ config: any; onChange: (c: any) => void; editin
 // ============================================================
 // 整改设置
 // ============================================================
-const RemediationSettings: React.FC<{ issueType: string; onChange: (v: string) => void; editing: boolean }> = ({ issueType, onChange, editing }) => {
+const RemediationSettings: React.FC<{
+ issueType: string
+ issueTypeUuid: string
+ onChange: (name: string, uuid: string) => void
+ editing: boolean
+}> = ({ issueType, issueTypeUuid, onChange, editing }) => {
  const [issueTypes, setIssueTypes] = useState<{ uuid: string; name: string }[]>([])
  const [loading, setLoading] = useState(false)
  const [open, setOpen] = useState(false)
@@ -685,6 +705,12 @@ const RemediationSettings: React.FC<{ issueType: string; onChange: (v: string) =
     .catch(() => {})
     .finally(() => setLoading(false))
  }, [])
+
+ useEffect(() => {
+  if (!issueType || issueTypeUuid || issueTypes.length === 0) return
+  const matched = issueTypes.find(item => item.name === issueType)
+  if (matched) onChange(matched.name, matched.uuid)
+ }, [issueType, issueTypeUuid, issueTypes])
 
  useEffect(() => {
   if (!open) return
@@ -716,18 +742,18 @@ const RemediationSettings: React.FC<{ issueType: string; onChange: (v: string) =
      <input
        style={S.input}
        value={issueType}
-       onChange={e => { onChange(e.target.value); setOpen(true) }}
+       onChange={e => { onChange(e.target.value, ''); setOpen(true) }}
        onFocus={() => setOpen(true)}
-       placeholder="输入关键字搜索或直接输入类型名称"
+       placeholder="输入关键字并从团队工作项类型中选择"
      />
      {open && (
        <div style={{ position: 'absolute', top: 34, left: 0, right: 0, background: '#fff', border: '1px solid #d9d9d9', borderRadius: 4, maxHeight: 220, overflow: 'auto', zIndex: 100, boxShadow: '0 2px 8px rgba(0,0,0,.15)' }}>
          {loading && <div style={{ padding: 8, color: '#999', fontSize: 12 }}>加载中…</div>}
          {!loading && filtered.length === 0 && <div style={{ padding: 8, color: '#999', fontSize: 12 }}>无匹配类型</div>}
          {filtered.map(t => {
-           const sel = t.name === issueType
+           const sel = t.uuid === issueTypeUuid || (!issueTypeUuid && t.name === issueType)
            return (
-             <div key={t.uuid} onClick={() => { onChange(t.name); setOpen(false) }}
+             <div key={t.uuid} onClick={() => { onChange(t.name, t.uuid); setOpen(false) }}
                style={{ padding: '6px 12px', cursor: 'pointer', fontSize: 13, background: sel ? '#e6f4ff' : 'transparent', color: sel ? '#1677ff' : '#333' }}
                onMouseEnter={e => { if (!sel) e.currentTarget.style.background = '#f5f5f5' }}
                onMouseLeave={e => { if (!sel) e.currentTarget.style.background = 'transparent' }}>
