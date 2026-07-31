@@ -859,7 +859,10 @@ const ResolutionRuleConfig: React.FC<{ rules: any; roles: any[]; onChange: (v: a
  const newRule = JSON.parse(JSON.stringify(rule))
  const parts = path.split('.')
  let cur = newRule
- for (let i = 0; i < parts.length - 1; i++) cur = cur[parts[i]]
+ for (let i = 0; i < parts.length - 1; i++) {
+   if (cur[parts[i]] == null || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {}
+   cur = cur[parts[i]]
+ }
  cur[parts[parts.length - 1]] = value
  onChange({ ...rules, [reviewType]: newRule })
  }
@@ -1001,6 +1004,57 @@ const ResolutionRuleConfig: React.FC<{ rules: any; roles: any[]; onChange: (v: a
  onClick={() => editing && toggleArrayItem('allowedConclusions', c.value)}>{c.label}</span>
  ))}
  </div>
+ </div>
+
+ {/* 5. 决议门径硬约束（发布「通过」前的硬性校验） */}
+ <div style={{ marginBottom: 20, padding: 12, background: '#fafafa', borderRadius: 4 }}>
+   <div style={{ fontWeight: 600, marginBottom: 8 }}>🚦 决议门径硬约束</div>
+   <div style={{ color: '#999', fontSize: 12, marginBottom: 8 }}>
+     发布最终决议为「通过」前，强制校验指标红线、Checklist 完整、前置阶段有效。可设为「阻断通过」「警告放行」「不校验」。旧评审单无此配置时按默认（阻断）执行。
+   </div>
+   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center' }}>
+     <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+       指标红线：
+       <select style={S.select} value={rule.gatePolicy?.indicatorRedLine || 'block'} disabled={!editing}
+         onChange={e => update('gatePolicy.indicatorRedLine', e.target.value)}>
+         <option value="block">阻断通过</option>
+         <option value="warn">警告放行</option>
+         <option value="off">不校验</option>
+       </select>
+     </label>
+     <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+       红线范围：
+       <select style={S.select} value={rule.gatePolicy?.indicatorGateMode || 'red_only'} disabled={!editing}
+         onChange={e => update('gatePolicy.indicatorGateMode', e.target.value)}>
+         <option value="red_only">仅红线</option>
+         <option value="red_and_yellow">红线+黄线</option>
+       </select>
+     </label>
+   </div>
+   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', marginTop: 8 }}>
+     <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+       Checklist：
+       <select style={S.select} value={rule.gatePolicy?.checklistComplete || 'block'} disabled={!editing}
+         onChange={e => update('gatePolicy.checklistComplete', e.target.value)}>
+         <option value="block">阻断通过</option>
+         <option value="warn">警告放行</option>
+         <option value="off">不校验</option>
+       </select>
+     </label>
+     <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
+       Checklist 范围：
+       <select style={S.select} value={rule.gatePolicy?.checklistScope || 'all'} disabled={!editing}
+         onChange={e => update('gatePolicy.checklistScope', e.target.value)}>
+         <option value="all">全部检查项</option>
+         <option value="required_roles">仅必投/否决角色</option>
+       </select>
+     </label>
+   </div>
+   <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, marginTop: 8, cursor: editing ? 'pointer' : 'default' }}>
+     <input type="checkbox" checked={rule.gatePolicy?.prerequisiteRecheck !== false} disabled={!editing}
+       onChange={e => update('gatePolicy.prerequisiteRecheck', e.target.checked)} />
+     发布「通过」前复查前置阶段决议仍有效（未撤回/否决）
+   </label>
  </div>
 
  {!editing && (
