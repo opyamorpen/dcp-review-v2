@@ -142,4 +142,19 @@ assert.match(remediationHandler, /REMEDIATION_STATUS_UNKNOWN/)
 assert.match(remediationHandler, /已全部完成，请确认并发起复审/)
 assert.equal(remediationHandler.includes('关联工作项已锁定'), false)
 
-console.log('Review guardrails verified: canonical prerequisites, phase uniqueness, evidence freeze, and remediation status flow.')
+// 决议门径硬约束：发布「通过」前校验指标红线 / Checklist 完整 / 前置阶段有效
+assert.match(backend, /async function validateResolutionGate\(/)
+assert.match(backend, /RESOLUTION_GATE_BLOCKED/)
+assert.match(backend, /gateViolations: gateResult\.violations/)
+assert.match(backend, /suggestDowngrade: violations\.length > 0 \? 'conditional_pass'/)
+assert.match(backend, /indicatorRedLine: 'block'/)
+assert.match(backend, /prerequisiteRecheck !== false/)
+// 前端：发布表单门径体检 + 422 拦截处理 + 一键降级
+assert.match(projectPage, /RESOLUTION_GATE_BLOCKED/)
+assert.match(projectPage, /gateViolations/)
+assert.match(projectPage, /一键降级为/)
+// 配置页：门径策略可配
+assert.match(configPage, /gatePolicy\?\.indicatorRedLine/)
+assert.match(configPage, /gatePolicy\?\.checklistComplete/)
+
+console.log('Review guardrails verified: canonical prerequisites, phase uniqueness, evidence freeze, remediation status flow, and resolution gate enforcement.')

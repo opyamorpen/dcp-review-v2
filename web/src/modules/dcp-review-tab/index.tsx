@@ -862,6 +862,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
   const [showPublishForm, setShowPublishForm] = useState(false)
   const [resolutionForm, setResolutionForm] = useState({ final_conclusion: '', condition_notes: '' })
   const [publishing, setPublishing] = useState(false)
+  const [gateViolations, setGateViolations] = useState<any[]>([])
   const [copyToast, setCopyToast] = useState('')
   const [currentUser, setCurrentUser] = useState<{ uuid: string; name: string }>({ uuid: '', name: '' })
   const [resolutionRule, setResolutionRule] = useState<any>(null)
@@ -1226,6 +1227,7 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
     if (!resolutionForm.final_conclusion) { setMsg('请选择决议结果'); return }
     setPublishing(true)
     setMsg('')
+    setGateViolations([])
     try {
       // 发布决议前先同步整改项状态，确保快照记录真实状态名
       const remediationIssues = (data.remediation_issues || data.linked_issues || []).filter((iss: any) => iss.link_type === 'remediation')
@@ -1240,8 +1242,15 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
       })
       setShowPublishForm(false)
       onRefresh()
-    } catch (e: any) { setMsg(e.message || '发布失败') }
-    finally { setPublishing(false) }
+    } catch (e: any) {
+      // 门径校验拦截：展示违规明细，支持一键降级为「有条件通过」
+      if (e?.status === 422 && e?.data?.code === 'RESOLUTION_GATE_BLOCKED') {
+        setGateViolations(e.data.gateViolations || [])
+        setMsg(e.data.error || '决议为「通过」但门径未达标，请降级为「有条件通过」')
+      } else {
+        setMsg(e.message || '发布失败')
+      }
+    } finally { setPublishing(false) }
   }
 
   async function handleRemind(target: 'reviewers' | 'resolution') {
@@ -1492,6 +1501,51 @@ export const ReviewDetail: React.FC<{ projectUuid: string; projectKey: string; p
               {(data.remediation_issues || []).length > 0
                 ? <span style={{ color: '#52c41a' }}> 已创建 {data.remediation_issues.length} 个整改项。</span>
                 : <span style={{ color: '#ff4d4f' }}> 当前无整改项，请先创建。</span>}
+            </div>
+          )}
+          {/* 决议门径体检：发布「通过」前展示指标红线 / Checklist 未勾项 */}
+          {(() => {
+            const fc = resolutionForm.final_conclusion
+            if (fc !== 'pass') return null
+            const gp = resolutionRule?.gatePolicy
+            const indPolicy = gp?.indicatorRedLine || 'block'
+            const chkPolicy = gp?.checklistComplete || 'block'
+            const redInds = (data.indicators || []).filter((i: any) => i.risk_color === 'red')
+            const unchecked = (data.checklist || []).filter((c: any) => !c.status || c.status === 'unchecked')
+            const indBlock = redInds.length > 0 && indPolicy !== 'off'
+            const chkBlock = unchecked.length > 0 && chkPolicy !== 'off'
+            if (!indBlock && !chkBlock) {
+              return (
+                <div style={{ marginTop: 8, padding: '6px 12px', borderRadius: 4, fontSize: 13, background: '#f6ffed', color: '#52c41a' }}>
+                  门径已达标：指标无红线、Checklist 已全勾选，可发布「通过」
+                </div>
+              )
+            }
+            return (
+              <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#ff4d4f', border: '1px solid #ffa39e' }}>
+                <div style={{ fontWeight: 600 }}>门径未达标，不可直接发布「通过」：</div>
+                {indBlock && <div>· 指标红线 {redInds.length} 项：{redInds.map((i: any) => i.indicator_name || '').filter(Boolean).join('、')}</div>}
+                {chkBlock && <div>· Checklist 未勾选 {unchecked.length} 项</div>}
+                <div style={{ color: '#fa8c16', marginTop: 4 }}>建议降级为「有条件通过」并挂整改项</div>
+              </div>
+            )
+          })()}
+          {/* 门径校验拦截返回的违规明细 + 一键降级 */}
+          {gateViolations.length > 0 && (
+            <div style={{ marginTop: 8, padding: '8px 12px', borderRadius: 4, fontSize: 13, background: '#fff2f0', color: '#ff4d4f', border: '1px solid #ffa39e' }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>门径拦截明细：</div>
+              {gateViolations.map((v: any, i: number) => (
+                <div key={i}>
+                  · {v.type === 'indicator_red' ? `指标红线（${(v.items || []).length} 项）`
+                    : v.type === 'checklist_incomplete' ? `Checklist 未全勾（${(v.items || []).length} 项）`
+                    : v.type === 'prerequisite_not_passed' ? `前置阶段未通过（${(v.items || []).map((x: any) => x.phase_code).join('、')}）`
+                    : v.type}
+                </div>
+              ))}
+              <button style={{ ...S.btn(false), marginTop: 6, borderColor: '#faad14', color: '#fa8c16' }}
+                onClick={() => { setResolutionForm({ final_conclusion: 'conditional_pass', condition_notes: resolutionForm.condition_notes || '' }); setGateViolations([]) }}>
+                一键降级为「有条件通过」
+              </button>
             </div>
           )}
           <div style={{ marginTop: 12 }}>

@@ -1011,6 +1011,15 @@ const DEFAULT_RESOLUTION_RULES: any = {
       rejectOnAnyVeto: true,
     },
     allowedConclusions: ['pass', 'conditional_pass', 'reject'],
+    // 决议门径硬约束：发布「通过」前校验指标红线 / Checklist 完整 / 前置阶段有效
+    gatePolicy: {
+      indicatorRedLine: 'block',     // block | warn | off
+      indicatorGateMode: 'red_only', // red_only | red_and_yellow
+      checklistComplete: 'block',     // block | warn | off
+      checklistScope: 'all',          // all | required_roles
+      prerequisiteRecheck: true,      // 复查前置阶段决议仍有效
+      enforceOn: ['pass'],            // 只对 pass 硬卡；conditional_pass/rework/fail/reject 放行
+    },
   },
   tr: {
     publisher: { mode: 'single_role', role: '' },
@@ -1023,6 +1032,15 @@ const DEFAULT_RESOLUTION_RULES: any = {
       rejectOnAnyVeto: true,
     },
     allowedConclusions: ['pass', 'conditional_pass', 'fail', 'rework'],
+    // 决议门径硬约束（TR 同样适用，见上方 DCP 注释）
+    gatePolicy: {
+      indicatorRedLine: 'block',
+      indicatorGateMode: 'red_only',
+      checklistComplete: 'block',
+      checklistScope: 'all',
+      prerequisiteRecheck: true,
+      enforceOn: ['pass'],
+    },
   },
 }
 
@@ -1337,6 +1355,66 @@ function validatePassRule(
   }
   // all_required_submitted 模式：只要求已提交，不校验通过数
   return { ok: true }
+}
+
+// 决议门径硬约束校验（发布决议时调用）
+// 仅对 gatePolicy.enforceOn 中的结论生效（默认仅 pass）：指标红线 / Checklist 未全勾 / 前置阶段未通过
+// block 阻断返回违规、warn 放行但记审计、off 跳过；旧评审单无 gatePolicy 时回退默认
+async function validateResolutionGate(
+  rv: any, rule: any, fc: string,
+  snapshotIndicators: any[], snapshotChecklist: any[],
+  projectIds: Set<string>,
+): Promise<{ ok: boolean; violations: any[]; warnings: any[]; suggestDowngrade?: string }> {
+  const reviewType = normalizeReviewType((rv as any).review_type || 'dcp')
+  const gp = rule?.gatePolicy || DEFAULT_RESOLUTION_RULES[reviewType]?.gatePolicy || {}
+  const enforceOn: string[] = Array.isArray(gp.enforceOn) ? gp.enforceOn : ['pass']
+  if (!enforceOn.includes(fc)) return { ok: true, violations: [], warnings: [] }
+
+  const violations: any[] = []
+  const warnings: any[] = []
+
+  // 1. 指标门径：按 risk_color 判定（risk_color 由 updateIndicators 经 calcRiskColor 写入）
+  if (gp.indicatorRedLine && gp.indicatorRedLine !== 'off') {
+    const badColors = gp.indicatorGateMode === 'red_and_yellow' ? ['red', 'yellow'] : ['red']
+    const bad = (snapshotIndicators || []).filter((i: any) => badColors.includes(i.risk_color))
+    if (bad.length > 0) {
+      const v = { type: 'indicator_red', items: bad.map((i: any) => ({ indicator_name: i.indicator_name || '', risk_color: i.risk_color })) }
+      if (gp.indicatorRedLine === 'block') violations.push(v); else warnings.push(v)
+    }
+  }
+
+  // 2. Checklist 门径：整单或必投/否决角色范围无 unchecked
+  if (gp.checklistComplete && gp.checklistComplete !== 'off') {
+    let items: any[] = snapshotChecklist || []
+    if (gp.checklistScope === 'required_roles') {
+      const mustNames: string[] = (rule?._frozen?.mustVoteOrVetoNames) || []
+      items = items.filter((c: any) => mustNames.includes(c.role_name))
+    }
+    const unchecked = items.filter((c: any) => !c.status || c.status === 'unchecked')
+    if (unchecked.length > 0) {
+      const v = { type: 'checklist_incomplete', items: unchecked.map((c: any) => ({ text: c.text || c.check_item || '', role_name: c.role_name || '' })) }
+      if (gp.checklistComplete === 'block') violations.push(v); else warnings.push(v)
+    }
+  }
+
+  // 3. 前置阶段门径：复查依赖阶段决议仍为 pass/conditional_pass 且未撤回
+  if (gp.prerequisiteRecheck !== false) {
+    const deps = await getPhaseDependencies((rv as any).phase_code || '', reviewType)
+    if (deps.length > 0) {
+      const passed = await getClosedPassingPhases(projectIds, reviewType)
+      const missing = deps.filter((d: string) => !passed.has(d))
+      if (missing.length > 0) {
+        violations.push({ type: 'prerequisite_not_passed', items: missing.map((d: string) => ({ phase_code: d })) })
+      }
+    }
+  }
+
+  return {
+    ok: violations.length === 0,
+    violations,
+    warnings,
+    suggestDowngrade: violations.length > 0 ? 'conditional_pass' : undefined,
+  }
 }
 
 // 决议规则可达性校验（保存配置/发起评审时调用）
@@ -4011,10 +4089,7 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
 
   const rv = await review.get(rid)
   if (!rv) return { body: { error: '评审单不存在' }, statusCode: 404 }
-  if (rv.status !== 'reviewing') {
-    return { body: { error: '当前状态不可发布决议' }, statusCode: 400 }
-  }
-  // 精确状态校验：reviewing / re_reviewing / awaiting_resolution 可发布决议
+  // 精确状态校验：reviewing / re_reviewing / awaiting_resolution 可发布决议（以 review_state 为准，不依赖旧 status 字段）
   const effState = getEffectiveState(rv)
   if (effState !== 'reviewing' && effState !== 'awaiting_resolution' && effState !== 're_reviewing') {
     return { body: { error: '当前状态不可发布决议' }, statusCode: 400 }
@@ -4123,6 +4198,41 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
   const passResult = validatePassRule(rule.passRule, allRvrs, roleTemplates, normalizedFc, rule._frozen)
   if (!passResult.ok) {
     return { body: { error: passResult.error }, statusCode: 400 }
+  }
+
+  // 校验：决议门径硬约束（指标红线 / Checklist 完整 / 前置阶段有效）
+  // 仅对 gatePolicy.enforceOn 中的结论生效（默认仅 pass）；warn 放行但记审计
+  const _gateInds = await qAll(indData, (v: any) => v.review_uuid === rid)
+  const _gateIndTpls = await qAll(indTpl)
+  const _gateSnapshotIndicators = _gateInds.map((ind: any) => {
+    const frozenName = ind.indicator_name || ''
+    const tpl = !frozenName ? _gateIndTpls.find((t: any) => t._key === ind.template_id) as any : null
+    return {
+      indicator_name: frozenName || tpl?.indicator_name || '',
+      current_value: ind.current_value || 0,
+      risk_color: ind.risk_color || 'green',
+      notes: ind.notes || '',
+    }
+  })
+  const _gateChecklist = jsonArr((rv as any).checklist_json || '[]')
+  const _gateProjectIds = new Set([String((rv as any).project_uuid || '')])
+  const gateResult = await validateResolutionGate(rv, rule, normalizedFc, _gateSnapshotIndicators, _gateChecklist, _gateProjectIds)
+  if (!gateResult.ok) {
+    await writeAudit(rid, puuid, '门径校验拦截', rid,
+      `pass 被门径拦截: ${gateResult.violations.map((v: any) => v.type).join(',')}`)
+    return {
+      body: {
+        code: 'RESOLUTION_GATE_BLOCKED',
+        error: '决议为「通过」但门径未达标，请降级为「有条件通过」并挂整改项，或调整指标/检查项后重试',
+        gateViolations: gateResult.violations,
+        suggestDowngrade: gateResult.suggestDowngrade,
+      },
+      statusCode: 422,
+    }
+  }
+  if (gateResult.warnings.length > 0) {
+    await writeAudit(rid, puuid, '门径校验警告', rid,
+      `pass 放行但存在门径警告: ${gateResult.warnings.map((v: any) => v.type).join(',')}`)
   }
 
   // 按当前轮次判断是否已有决议（支持多轮决议）
@@ -4254,7 +4364,7 @@ export async function publishResolution(req: any): Promise<PluginResponse> {
     }
   }
 
-  return { body: { ok: true, snapshot_number: snapshotNumber, status: newStatus, review_state: targetState } }
+  return { body: { ok: true, snapshot_number: snapshotNumber, status: newStatus, review_state: targetState, gateWarnings: gateResult.warnings || [] } }
 }
 
 // 兼容旧名
